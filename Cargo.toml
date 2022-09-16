@@ -3,8 +3,13 @@ name = "factoriomaps-rs"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[profile.release]
+debug = true
 
 [dependencies]
 fast_image_resize = "1.0.0"
+humantime = "2.1.0"
 image = "0.24.3"
+indicatif = "0.17.1"
+rayon = "1.5.3"
+webp = "0.2.2"
