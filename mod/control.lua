@@ -7,24 +7,32 @@ function chunk_key(chunk)
 end
 
 function map(tbl, func, ...)
-    local new_tbl = {}
-    for k, v in pairs(tbl) do new_tbl[k] = func(v, k, ...) end
-    return new_tbl
+  local new_tbl = {}
+  for k, v in pairs(tbl) do new_tbl[k] = func(v, k, ...) end
+  return new_tbl
 end
 
 function filter(tbl, func, ...)
-    local new_tbl = {}
-    local add = #tbl > 0
-    for k, v in pairs(tbl) do
-        if func(v, k, ...) then
-            if add then
-                table.insert(new_tbl, v)
-            else
-                new_tbl[k] = v
-            end
-        end
+  local new_tbl = {}
+  local add = #tbl > 0
+  for k, v in pairs(tbl) do
+    if func(v, k, ...) then
+      if add then
+        table.insert(new_tbl, v)
+      else
+        new_tbl[k] = v
+      end
     end
-    return new_tbl
+  end
+  return new_tbl
+end
+
+function values(tbl)
+  local new_tbl = {}
+  for _, v in pairs(tbl) do
+    table.insert(new_tbl, v)
+  end
+  return new_tbl
 end
 
 function get_neighbors(chunks, chunk)
@@ -137,6 +145,13 @@ function take_screenshots(player)
       end
       queue[key] = nil
     end
+
+    -- write information about the current surface to a file
+    local surface_info = {
+      name = surface.name,
+      chunks = map(filter(values(chunks), function(chunk) return not chunk.edge end), function(chunk) return {x = chunk.x, y = chunk.y} end),
+    }
+    game.write_file('info.json', game.table_to_json(surface_info))
 
     -- create map tags
     if false then

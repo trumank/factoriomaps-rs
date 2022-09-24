@@ -7,9 +7,14 @@ edition = "2021"
 debug = true
 
 [dependencies]
+env_logger = "0.9.0"
 fast_image_resize = "1.0.0"
+fuser = "0.11.1"
 humantime = "2.1.0"
 image = "0.24.3"
 indicatif = "0.17.1"
+libc = "0.2.132"
 rayon = "1.5.3"
+serde = { version = "1.0.145", features = [ "derive" ] }
+serde_json = "1.0.85"
 webp = "0.2.2"
