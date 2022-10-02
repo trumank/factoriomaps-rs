@@ -19,6 +19,8 @@ use webp::*;
 use libc::ENOENT;
 use fuser::{MountOption, FileType, FileAttr, Filesystem, Request, ReplyEntry, ReplyAttr, ReplyWrite, ReplyCreate, ReplyEmpty};
 
+use indicatif::{ProgressBar, ProgressStyle};
+
 //const TILE_SIZE: u32 = 2048;
 const TILE_SIZE: u32 = 1024;
 const MAX_ZOOM: i32 = 20;
@@ -128,20 +130,53 @@ enum TileState {
 }
 
 struct ThreadContext {
-    surface: String,
+    surface_info: SurfaceInfo,
     tiles: HashMap<Tile, TileState>,
+    progress: ProgressBar,
+    loaded_tiles: usize,
 }
 impl ThreadContext {
-    fn new(surface: String) -> ThreadContext {
+    fn new(surface_info: SurfaceInfo) -> ThreadContext {
+        let mut tiles = HashMap::new();
+        //let mut total = 0;
+        for coord in &surface_info.chunks {
+            let mut tile = Tile {
+                x: coord.x,
+                y: coord.y,
+                zoom: MAX_ZOOM,
+            };
+            loop {
+                if tile.zoom <= MIN_ZOOM || tiles.contains_key(&tile) {
+                    break;
+                }
+                tiles.insert(tile.clone() , TileState::Waiting);
+                tile = tile.zoom_out();
+                //total += 1;
+            }
+        }
+
+        let progress = ProgressBar::new(surface_info.chunks.len() as u64);
+        progress.set_style(
+        indicatif::ProgressStyle::with_template("{wide_bar} Elapsed: {elapsed_precise}, ETA: {my_eta}").unwrap()
+            .with_key("my_eta", |s: &indicatif::ProgressState, w: &mut dyn std::fmt::Write| {
+                 match (s.pos(), s.len()) {
+                    (pos,Some(len)) => write!(w, "{:#}", humantime::format_duration(std::time::Duration::from_secs(s.elapsed().as_secs() * (len-pos)/pos))),
+                    _ => write!(w, "-"),
+                }.unwrap()
+            })
+        );
+
         ThreadContext {
-            surface,
-            tiles: HashMap::new(),
+            surface_info,
+            tiles,
+            progress,
+            loaded_tiles: 0,
         }
     }
 
     fn tile_ready(&self, tile: &Tile) -> bool {
         tile.children().into_iter()/*.inspect(|tile| {
-            println!("child state: {:?} {}", &tile, match self.tiles.get(&tile) {
+            //println!("child state: {:?} {}", &tile, match self.tiles.get(&tile) {
                 Some(TileState::Loaded(_)) => "loaded",
                 Some(TileState::Waiting) => "waiting",
                 Some(TileState::Processed) => "processed",
@@ -155,6 +190,16 @@ impl ThreadContext {
         })
     }
 
+    fn tile_loaded_src(&mut self, tile: Tile, image: DynamicImage) {
+        self.tile_loaded(tile, image);
+        self.progress.inc(1);
+        self.loaded_tiles += 1;
+        if self.loaded_tiles == self.surface_info.chunks.len() {
+            println!("finished");
+            std::process::exit(0);
+        }
+    }
+
     fn tile_loaded(&mut self, tile: Tile, image: DynamicImage) {
         self.tiles.insert(tile.clone(), TileState::Loaded(image));
         if let Some((parent, image)) = ThreadContext::tile_loaded_task(self, tile) {
@@ -163,7 +208,7 @@ impl ThreadContext {
     }
 
     fn tile_loaded_task(ctx: &mut ThreadContext, tile: Tile) -> Option<(Tile, DynamicImage)> {
-        println!("{:?}", tile);
+        //println!("{:?}", tile);
 
         if let TileState::Loaded(image) = &ctx.tiles[&tile] {
             // write out current tile in parts
@@ -179,7 +224,7 @@ impl ThreadContext {
                 let sub_img = image.view(x * part_size, y * part_size, part_size, part_size).to_image();
                 let path_str = &format!(
                     "web/Images/4/{}/day/{}/{}/{}.png",
-                    ctx.surface,
+                    ctx.surface_info.name,
                     tile.zoom,
                     x as i32 + tile.x * parts as i32,
                     y as i32 + tile.y * parts as i32
@@ -202,10 +247,10 @@ impl ThreadContext {
             let parent = tile.zoom_out();
             if parent.zoom > MIN_ZOOM {
                 if !ctx.tile_ready(&parent) {
-                    println!("Not all children loaded, still waiting");
+                    //println!("Not all children loaded, still waiting");
                     None
                 } else {
-                    println!("All children loaded, building parent tile");
+                    //println!("All children loaded, building parent tile");
 
                     let mut full_size = DynamicImage::new_rgba8(TILE_SIZE * 2, TILE_SIZE * 2);
                     for tile in parent.children() {
@@ -214,6 +259,7 @@ impl ThreadContext {
                         if let Some(TileState::Loaded(img)) = state {
                             full_size.copy_from(img, (tile.x - parent.x * 2) as u32 * TILE_SIZE, (tile.y - parent.y * 2) as u32 * TILE_SIZE).unwrap();
                             ctx.tiles.insert(tile, TileState::Processed);
+                            //ctx.progress.inc(1);
                             //*state = Some(&mut TileState::Processed);
                         }
                     }
@@ -279,7 +325,6 @@ impl ThreadContext {
 struct HelloFS {
     files: HashMap<u64, File>,
     next_inode: u64,
-    surface_info: Option<SurfaceInfo>,
     thread_context: Option<ThreadContext>,
 }
 
@@ -293,7 +338,6 @@ impl HelloFS {
         HelloFS {
             files: HashMap::new(),
             next_inode: STARTING_INODE,
-            surface_info: None,
             thread_context: None,
         }
     }
@@ -357,7 +401,7 @@ impl Filesystem for HelloFS {
         _flags: i32,
         reply: ReplyCreate,
     ) {
-        println!("create() called with {:?} {:?}", parent, name);
+        //println!("create() called with {:?} {:?}", parent, name);
         let mut attr = HELLO_TXT_ATTR.clone();
         attr.ino = self.create_file(name.to_str().unwrap().to_string());
         attr.size = 0;
@@ -374,32 +418,17 @@ impl Filesystem for HelloFS {
         _flush: bool,
         reply: ReplyEmpty,
     ) {
-        println!("release() called with {:?}", inode);
+        //println!("release() called with {:?}", inode);
         let file = &self.files[&inode];
-        println!("releasing {:?}", file.path);
+        //println!("releasing {:?}", file.path);
         if file.path == "info.json" {
-            let info_exists = self.surface_info.is_none();
+            let info_exists = self.thread_context.is_none();
             assert!(info_exists, "SurfaceInfo already exists");
             let surface_info: SurfaceInfo = serde_json::from_slice(&file.data).unwrap();
-            println!("{:?}", &surface_info);
+            //println!("{:?}", &surface_info);
 
-            let mut thread_context = ThreadContext::new(surface_info.name.to_owned());
-            for coord in &surface_info.chunks {
-                let mut tile = Tile {
-                    x: coord.x,
-                    y: coord.y,
-                    zoom: MAX_ZOOM,
-                };
-                loop {
-                    if tile.zoom <= MIN_ZOOM || thread_context.tiles.contains_key(&tile) {
-                        break;
-                    }
-                    thread_context.tiles.insert(tile.clone() , TileState::Waiting);
-                    tile = tile.zoom_out();
-                }
-            }
+            let mut thread_context = ThreadContext::new(surface_info);
 
-            self.surface_info = Some(surface_info);
             self.thread_context = Some(thread_context);
             self.files.remove(&inode);
         } else if file.path.ends_with(".png") {
@@ -414,7 +443,7 @@ impl Filesystem for HelloFS {
             let x = split.next().unwrap().parse::<i32>().unwrap();
             let y = split.next().unwrap().parse::<i32>().unwrap();
 
-            self.thread_context.as_mut().unwrap().tile_loaded(Tile {
+            self.thread_context.as_mut().unwrap().tile_loaded_src(Tile {
                 x,
                 y,
                 zoom: MAX_ZOOM,
@@ -442,5 +471,13 @@ fn setup_fuse() {
 }
 
 fn main() {
+    let cmd = std::process::Command::new("./factorio/bin/x64/factorio")
+        .arg("--disable-audio")
+        .arg("--disable-migration-window")
+        .arg("--load-game")
+        .arg("maps/1c98b2430bf2c15c78808092871b671e7baed29c1869be652b7b8af1e6aaff40.zip")
+        .spawn()
+        .unwrap();
+    // TODO very unlikely race condition as we start starting factorio before mounting the output directory
     setup_fuse()
 }
