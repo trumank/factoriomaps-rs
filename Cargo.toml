@@ -7,6 +7,7 @@ edition = "2021"
 debug = true
 
 [dependencies]
+ctrlc = { version = "3.2.3", features = [ "termination" ] }
 env_logger = "0.9.0"
 fast_image_resize = "1.0.0"
 fuser = "0.11.1"

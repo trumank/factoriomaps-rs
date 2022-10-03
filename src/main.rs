@@ -322,7 +322,7 @@ struct HelloFS {
     files: HashMap<u64, File>,
     next_inode: u64,
     thread_context: Option<ThreadContext>,
-    tx: std::sync::mpsc::Sender<()>,
+    tx: std::sync::mpsc::Sender<Status>,
 }
 
 struct File {
@@ -331,7 +331,7 @@ struct File {
 }
 
 impl HelloFS {
-    fn new(tx: std::sync::mpsc::Sender<()>) -> HelloFS {
+    fn new(tx: std::sync::mpsc::Sender<Status>) -> HelloFS {
         HelloFS {
             files: HashMap::new(),
             next_inode: STARTING_INODE,
@@ -451,12 +451,28 @@ impl Filesystem for HelloFS {
 
             if tc.loaded_tiles == tc.surface_info.chunks.len() {
                 println!("finished");
-                self.tx.send(()).unwrap();
+                self.tx.send(Status::Finished).unwrap();
             }
 
             self.files.remove(&inode);
         }
         reply.ok();
+    }
+}
+
+struct ChildGuard(std::process::Child);
+
+enum Status {
+    Finished,
+    Killed,
+}
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        match self.0.kill() {
+            Err(e) => println!("Could not kill child process: {}", e),
+            Ok(_) => println!("Successfully killed child process"),
+        }
     }
 }
 
@@ -469,32 +485,50 @@ fn setup_fuse() {
         //MountOption::AutoUnmount,
     ];
 
-    let (tx, rx): (std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>) = std::sync::mpsc::channel();
+    let (tx, rx): (std::sync::mpsc::Sender<Status>, std::sync::mpsc::Receiver<Status>) = std::sync::mpsc::channel();
 
+    let fuse_tx = tx.clone();
     let session = fuser::spawn_mount2(
-        HelloFS::new(tx),
+        HelloFS::new(fuse_tx),
         mountpoint,
         &options,
     ).unwrap();
 
+    let ctrlc_tx = tx.clone();
+    ctrlc::set_handler(move || {
+        ctrlc_tx.send(Status::Killed).unwrap();
+    }).unwrap();
+
     // TODO very unlikely race condition as we start starting factorio before mounting the output directory
-    let mut factorio = std::process::Command::new("xvfb-run")
-        .arg("./factorio/bin/x64/factorio")
+    let _xvfb = ChildGuard(std::process::Command::new("Xvfb")
+        .arg(":8")
+        .arg("-screen")
+        .arg(",0")
+        .arg("1024x768x16")
+        .spawn()
+        .unwrap());
+    let _factorio = ChildGuard(std::process::Command::new("./factorio/bin/x64/factorio")
+        .env("DISPLAY", ":8")
         .arg("--disable-audio")
         .arg("--disable-migration-window")
         .arg("--load-game")
-        .arg("maps/b434bb4a49ef3bd9b44649244e0d4c19357c16f106ae5b3b8e1e6febdb56fed0.zip")
+        .arg("maps/e752be9eade5aa80de908f825382e3bd98e0d29a4c7ffa07a7c0071f92ac39ad.zip")
+        //.arg("maps/91c009e61f44c3c532f7152b0501ea0fc920723148dd1c38c4da129eb9d399f9.zip")
         //.stdout(std::process::Stdio::null()) // TODO scan output for errors?
         .spawn()
-        .unwrap();
+        .unwrap());
 
-    println!("waiting on background thread");
-    rx.recv().unwrap();
-    println!("recieved finish");
+    let status = rx.recv().unwrap();
+    match status {
+        Status::Killed => {
+            println!("killed");
+        }
+        Status::Finished => {
+            println!("finished");
+        }
+    }
 
-    factorio.kill().unwrap();
     session.join();
-    //cmd.join
 }
 
 fn main() {
