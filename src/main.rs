@@ -194,10 +194,6 @@ impl ThreadContext {
         self.tile_loaded(tile, image);
         self.progress.inc(1);
         self.loaded_tiles += 1;
-        if self.loaded_tiles == self.surface_info.chunks.len() {
-            println!("finished");
-            std::process::exit(0);
-        }
     }
 
     fn tile_loaded(&mut self, tile: Tile, image: DynamicImage) {
@@ -326,6 +322,7 @@ struct HelloFS {
     files: HashMap<u64, File>,
     next_inode: u64,
     thread_context: Option<ThreadContext>,
+    tx: std::sync::mpsc::Sender<()>,
 }
 
 struct File {
@@ -334,11 +331,12 @@ struct File {
 }
 
 impl HelloFS {
-    fn new() -> HelloFS {
+    fn new(tx: std::sync::mpsc::Sender<()>) -> HelloFS {
         HelloFS {
             files: HashMap::new(),
             next_inode: STARTING_INODE,
             thread_context: None,
+            tx,
         }
     }
 }
@@ -443,11 +441,18 @@ impl Filesystem for HelloFS {
             let x = split.next().unwrap().parse::<i32>().unwrap();
             let y = split.next().unwrap().parse::<i32>().unwrap();
 
-            self.thread_context.as_mut().unwrap().tile_loaded_src(Tile {
+            let tc = self.thread_context.as_mut().unwrap();
+
+            tc.tile_loaded_src(Tile {
                 x,
                 y,
                 zoom: MAX_ZOOM,
             }, img);
+
+            if tc.loaded_tiles == tc.surface_info.chunks.len() {
+                println!("finished");
+                self.tx.send(()).unwrap();
+            }
 
             self.files.remove(&inode);
         }
@@ -461,23 +466,37 @@ fn setup_fuse() {
 
     let options = vec![
         MountOption::FSName("fuser".to_string()),
-        MountOption::AutoUnmount,
+        //MountOption::AutoUnmount,
     ];
-    fuser::mount2(
-        HelloFS::new(),
+
+    let (tx, rx): (std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>) = std::sync::mpsc::channel();
+
+    let session = fuser::spawn_mount2(
+        HelloFS::new(tx),
         mountpoint,
         &options,
     ).unwrap();
-}
 
-fn main() {
-    let cmd = std::process::Command::new("./factorio/bin/x64/factorio")
+    // TODO very unlikely race condition as we start starting factorio before mounting the output directory
+    let mut factorio = std::process::Command::new("xvfb-run")
+        .arg("./factorio/bin/x64/factorio")
         .arg("--disable-audio")
         .arg("--disable-migration-window")
         .arg("--load-game")
-        .arg("maps/1c98b2430bf2c15c78808092871b671e7baed29c1869be652b7b8af1e6aaff40.zip")
+        .arg("maps/b434bb4a49ef3bd9b44649244e0d4c19357c16f106ae5b3b8e1e6febdb56fed0.zip")
+        //.stdout(std::process::Stdio::null()) // TODO scan output for errors?
         .spawn()
         .unwrap();
-    // TODO very unlikely race condition as we start starting factorio before mounting the output directory
+
+    println!("waiting on background thread");
+    rx.recv().unwrap();
+    println!("recieved finish");
+
+    factorio.kill().unwrap();
+    session.join();
+    //cmd.join
+}
+
+fn main() {
     setup_fuse()
 }
