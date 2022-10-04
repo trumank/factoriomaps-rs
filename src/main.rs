@@ -9,6 +9,7 @@ use std::ffi::OsStr;
 use std::time::{Duration, UNIX_EPOCH};
 
 use rayon::prelude::*;
+use crossbeam_channel::{select, unbounded, bounded};
 
 use serde::{Deserialize, Serialize};
 
@@ -26,7 +27,7 @@ const TILE_SIZE: u32 = 1024;
 const MAX_ZOOM: i32 = 20;
 const MIN_ZOOM: i32 = 12;
 
-const TTL: Duration = Duration::from_secs(1);           // 1 second
+const TTL: Duration = Duration::from_secs(1);
 const BLOCK_SIZE: u64 = 512;
 const STARTING_INODE: u64 = 2; // https://stackoverflow.com/questions/24613454/what-are-inode-numbers-1-and-2-used-for
 
@@ -129,33 +130,45 @@ enum TileState {
     Processed,
 }
 
+impl TileState {
+    fn take(&mut self) -> DynamicImage {
+        let old = std::mem::replace(self, TileState::Processed);
+        if let TileState::Loaded(img) = old {
+            img
+        } else {
+            panic!("TileState is not Loaded");
+        }
+    }
+}
+
 struct ThreadContext {
     surface_info: SurfaceInfo,
     tiles: HashMap<Tile, TileState>,
     progress: ProgressBar,
     loaded_tiles: usize,
+    total_tiles: usize,
 }
 impl ThreadContext {
     fn new(surface_info: SurfaceInfo) -> ThreadContext {
         let mut tiles = HashMap::new();
-        //let mut total = 0;
+
         for coord in &surface_info.chunks {
             let mut tile = Tile {
                 x: coord.x,
                 y: coord.y,
                 zoom: MAX_ZOOM,
             };
+
             loop {
                 if tile.zoom <= MIN_ZOOM || tiles.contains_key(&tile) {
                     break;
                 }
                 tiles.insert(tile.clone() , TileState::Waiting);
                 tile = tile.zoom_out();
-                //total += 1;
             }
         }
 
-        let progress = ProgressBar::new(surface_info.chunks.len() as u64);
+        let progress = ProgressBar::new(tiles.len() as u64);
         progress.set_style(
         indicatif::ProgressStyle::with_template("{wide_bar} Elapsed: {elapsed_precise}, ETA: {my_eta}").unwrap()
             .with_key("my_eta", |s: &indicatif::ProgressState, w: &mut dyn std::fmt::Write| {
@@ -168,6 +181,7 @@ impl ThreadContext {
 
         ThreadContext {
             surface_info,
+            total_tiles: tiles.len(),
             tiles,
             progress,
             loaded_tiles: 0,
@@ -175,14 +189,7 @@ impl ThreadContext {
     }
 
     fn tile_ready(&self, tile: &Tile) -> bool {
-        tile.children().into_iter()/*.inspect(|tile| {
-            //println!("child state: {:?} {}", &tile, match self.tiles.get(&tile) {
-                Some(TileState::Loaded(_)) => "loaded",
-                Some(TileState::Waiting) => "waiting",
-                Some(TileState::Processed) => "processed",
-                None => "none",
-            });
-        })*/.all(|tile| match self.tiles.get(&tile) {
+        tile.children().into_iter().all(|tile| match self.tiles.get(&tile) {
             Some(TileState::Loaded(_)) => true,
             Some(TileState::Waiting) => false,
             Some(TileState::Processed) => panic!("Shouldn't be checking already processed tiles"),
@@ -190,139 +197,83 @@ impl ThreadContext {
         })
     }
 
-    fn tile_loaded_src(&mut self, tile: Tile, image: DynamicImage) {
-        self.tile_loaded(tile, image);
+    fn progress(&mut self) {
         self.progress.inc(1);
         self.loaded_tiles += 1;
     }
 
-    fn tile_loaded(&mut self, tile: Tile, image: DynamicImage) {
-        self.tiles.insert(tile.clone(), TileState::Loaded(image));
-        if let Some((parent, image)) = ThreadContext::tile_loaded_task(self, tile) {
-            self.tile_loaded(parent, image);
+    fn tile_write_parts(surface_name: &String, tile: &Tile, image: &DynamicImage) {
+        let parts = 2;
+        let part_size = TILE_SIZE / parts;
+        let mut coords = vec![];
+        for x in 0..parts {
+            for y in 0..parts {
+                coords.push((x, y));
+            }
         }
+        coords.into_par_iter().for_each(|(x, y)| {
+            let sub_img = image.view(x * part_size, y * part_size, part_size, part_size).to_image();
+            let path_str = &format!(
+                "web/Images/4/{}/day/{}/{}/{}.png",
+                surface_name,
+                tile.zoom,
+                x as i32 + tile.x * parts as i32,
+                y as i32 + tile.y * parts as i32
+            );
+            let path = Path::new(path_str);
+            fs::create_dir_all(&path.parent().unwrap()).unwrap();
+            //sub_img.save(&path).unwrap();
+
+            let dyn_img = DynamicImage::from(sub_img);
+            let encoder = Encoder::from_image(&dyn_img).unwrap();
+            //let webp = encoder.encode_lossless();
+            let webp = encoder.encode(40.0);
+            std::fs::write(Path::new(path_str).with_extension("webp"), &*webp).unwrap();
+        });
     }
 
-    fn tile_loaded_task(ctx: &mut ThreadContext, tile: Tile) -> Option<(Tile, DynamicImage)> {
-        //println!("{:?}", tile);
+    fn image_resize(src: DynamicImage) -> DynamicImage {
+        let width = NonZeroU32::new(src.width()).unwrap();
+        let height = NonZeroU32::new(src.height()).unwrap();
+        let src_image = fr::Image::from_vec_u8(
+            width,
+            height,
+            src.into_rgba8().into_raw(),
+            fr::PixelType::U8x4,
+        ).unwrap();
 
-        if let TileState::Loaded(image) = &ctx.tiles[&tile] {
-            // write out current tile in parts
-            let parts = 2;
-            let part_size = TILE_SIZE / parts;
-            let mut coords = vec![];
-            for x in 0..parts {
-                for y in 0..parts {
-                    coords.push((x, y));
-                }
-            }
-            coords.into_par_iter().for_each(|(x, y)| {
-                let sub_img = image.view(x * part_size, y * part_size, part_size, part_size).to_image();
-                let path_str = &format!(
-                    "web/Images/4/{}/day/{}/{}/{}.png",
-                    ctx.surface_info.name,
-                    tile.zoom,
-                    x as i32 + tile.x * parts as i32,
-                    y as i32 + tile.y * parts as i32
-                );
-                let path = Path::new(path_str);
-                fs::create_dir_all(&path.parent().unwrap()).unwrap();
-                //sub_img.save(&path).unwrap();
+        // Create container for data of destination image
+        let dst_width = NonZeroU32::new(TILE_SIZE).unwrap();
+        let dst_height = NonZeroU32::new(TILE_SIZE).unwrap();
+        let mut dst_image = fr::Image::new(
+            dst_width,
+            dst_height,
+            src_image.pixel_type(),
+        );
 
-                let dyn_img = DynamicImage::from(sub_img);
-                let encoder = Encoder::from_image(&dyn_img).unwrap();
-                //let webp = encoder.encode_lossless();
-                let webp = encoder.encode(40.0);
-                std::fs::write(Path::new(path_str).with_extension("webp"), &*webp).unwrap();
-            });
+        // Get mutable view of destination image data
+        let mut dst_view = dst_image.view_mut();
 
-            // insert tile into map to reference later
-            //ctx.tiles.insert(tile.clone(), TileState::Loaded(image));
+        // Create Resizer instance and resize source image
+        // into buffer of destination image
+        let mut resizer = fr::Resizer::new(
+            fr::ResizeAlg::Convolution(fr::FilterType::Lanczos3),
+        );
+        resizer.resize(&src_image.view(), &mut dst_view).unwrap();
 
-            // check if this is the last tile needed to create parent tile
-            let parent = tile.zoom_out();
-            if parent.zoom > MIN_ZOOM {
-                if !ctx.tile_ready(&parent) {
-                    //println!("Not all children loaded, still waiting");
-                    None
-                } else {
-                    //println!("All children loaded, building parent tile");
-
-                    let mut full_size = DynamicImage::new_rgba8(TILE_SIZE * 2, TILE_SIZE * 2);
-                    for tile in parent.children() {
-                        //let state = &mut ctx.tiles.get_mut(&tile);
-                        let state = &ctx.tiles.get(&tile);
-                        if let Some(TileState::Loaded(img)) = state {
-                            full_size.copy_from(img, (tile.x - parent.x * 2) as u32 * TILE_SIZE, (tile.y - parent.y * 2) as u32 * TILE_SIZE).unwrap();
-                            ctx.tiles.insert(tile, TileState::Processed);
-                            //ctx.progress.inc(1);
-                            //*state = Some(&mut TileState::Processed);
-                        }
-                    }
-
-                    //let resized = full_size.resize(TILE_SIZE, TILE_SIZE, image::imageops::FilterType::Nearest);
-
-                    let width = NonZeroU32::new(full_size.width()).unwrap();
-                    let height = NonZeroU32::new(full_size.height()).unwrap();
-                    let src_image = fr::Image::from_vec_u8(
-                        width,
-                        height,
-                        full_size.into_rgba8().into_raw(),
-                        fr::PixelType::U8x4,
-                    ).unwrap();
-
-                    // Create container for data of destination image
-                    let dst_width = NonZeroU32::new(TILE_SIZE).unwrap();
-                    let dst_height = NonZeroU32::new(TILE_SIZE).unwrap();
-                    let mut dst_image = fr::Image::new(
-                        dst_width,
-                        dst_height,
-                        src_image.pixel_type(),
-                    );
-
-                    // Get mutable view of destination image data
-                    let mut dst_view = dst_image.view_mut();
-
-                    // Create Resizer instance and resize source image
-                    // into buffer of destination image
-                    let mut resizer = fr::Resizer::new(
-                        fr::ResizeAlg::Convolution(fr::FilterType::Lanczos3),
-                    );
-                    resizer.resize(&src_image.view(), &mut dst_view).unwrap();
-
-                    // Divide RGB channels of destination image by alpha
-                    //alpha_mul_div.divide_alpha_inplace(&mut dst_view).unwrap();
-                    let resized = DynamicImage::ImageRgba8(image::RgbaImage::from_raw(
-                        TILE_SIZE, TILE_SIZE,
-                        dst_image.into_vec()
-                    ).unwrap());
-
-                    Some((parent, resized))
-                }
-            } else {
-                None
-            }
-
-            /*
-            println!("work {:?}", ctx.tiles.iter().map(|(k, v)| {
-                match v {
-                    TileState::Processed => None,
-                    TileState::Waiting => Some((k, "Waiting")),
-                    TileState::Loaded(_) => Some((k, "Loaded")),
-                }
-            }).filter(|msg| msg.is_some()).collect::<Vec<_>>());
-            */
-        } else {
-            None
-        }
+        // Divide RGB channels of destination image by alpha
+        //alpha_mul_div.divide_alpha_inplace(&mut dst_view).unwrap();
+        DynamicImage::ImageRgba8(image::RgbaImage::from_raw(
+            TILE_SIZE, TILE_SIZE,
+            dst_image.into_vec()
+        ).unwrap())
     }
 }
 
 struct HelloFS {
     files: HashMap<u64, File>,
     next_inode: u64,
-    thread_context: Option<ThreadContext>,
-    tx: std::sync::mpsc::Sender<Status>,
+    tx: crossbeam::channel::Sender<MessageToMain>,
 }
 
 struct File {
@@ -331,11 +282,10 @@ struct File {
 }
 
 impl HelloFS {
-    fn new(tx: std::sync::mpsc::Sender<Status>) -> HelloFS {
+    fn new(tx: crossbeam::channel::Sender<MessageToMain>) -> HelloFS {
         HelloFS {
             files: HashMap::new(),
             next_inode: STARTING_INODE,
-            thread_context: None,
             tx,
         }
     }
@@ -392,7 +342,7 @@ impl Filesystem for HelloFS {
     fn create(
         &mut self,
         _req: &Request,
-        parent: u64,
+        _parent: u64,
         name: &OsStr,
         _mode: u32,
         _umask: u32,
@@ -417,54 +367,38 @@ impl Filesystem for HelloFS {
         reply: ReplyEmpty,
     ) {
         //println!("release() called with {:?}", inode);
-        let file = &self.files[&inode];
+        self.tx.send(MessageToMain::File(self.files.remove(&inode).unwrap())).unwrap();
         //println!("releasing {:?}", file.path);
-        if file.path == "info.json" {
-            let info_exists = self.thread_context.is_none();
-            assert!(info_exists, "SurfaceInfo already exists");
-            let surface_info: SurfaceInfo = serde_json::from_slice(&file.data).unwrap();
-            //println!("{:?}", &surface_info);
-
-            let mut thread_context = ThreadContext::new(surface_info);
-
-            self.thread_context = Some(thread_context);
-            self.files.remove(&inode);
-        } else if file.path.ends_with(".png") {
-            let img = image::load_from_memory(&file.data).unwrap();
-
-            let mut split = Path::new(&file.path)
-                .file_stem()
-                .and_then(std::ffi::OsStr::to_str)
-                .unwrap()
-                .split(",");
-            let surface_name = split.next().unwrap().to_owned();
-            let x = split.next().unwrap().parse::<i32>().unwrap();
-            let y = split.next().unwrap().parse::<i32>().unwrap();
-
-            let tc = self.thread_context.as_mut().unwrap();
-
-            tc.tile_loaded_src(Tile {
-                x,
-                y,
-                zoom: MAX_ZOOM,
-            }, img);
-
-            if tc.loaded_tiles == tc.surface_info.chunks.len() {
-                println!("finished");
-                self.tx.send(Status::Finished).unwrap();
-            }
-
-            self.files.remove(&inode);
-        }
         reply.ok();
     }
 }
 
 struct ChildGuard(std::process::Child);
 
-enum Status {
+enum MessageToMain {
     Finished,
     Killed,
+    File(File),
+    FinishWriteParts {
+        tile: Tile,
+        image: DynamicImage,
+    },
+    FinishBuildParent {
+        parent: Tile,
+        image: DynamicImage,
+    },
+}
+
+enum MessageToWorker {
+    TileWriteParts {
+        surface: String,
+        tile: Tile,
+        image: DynamicImage,
+    },
+    TileBuildParent {
+        parent: Tile,
+        children: Vec<(Tile, DynamicImage)>,
+    },
 }
 
 impl Drop for ChildGuard {
@@ -477,58 +411,174 @@ impl Drop for ChildGuard {
 }
 
 fn setup_fuse() {
-    env_logger::init();
-    let mountpoint = env::args_os().nth(1).unwrap();
+    let res = crossbeam::scope(|scope| {
+        env_logger::init();
+        let mountpoint = env::args_os().nth(1).unwrap();
 
-    let options = vec![
-        MountOption::FSName("fuser".to_string()),
-        //MountOption::AutoUnmount,
-    ];
+        let options = vec![
+            MountOption::FSName("fuser".to_string()),
+            //MountOption::AutoUnmount,
+        ];
 
-    let (tx, rx): (std::sync::mpsc::Sender<Status>, std::sync::mpsc::Receiver<Status>) = std::sync::mpsc::channel();
+        let (send_result, recv_result) = unbounded::<MessageToMain>();
+        let (send_work, recv_work) = unbounded::<MessageToWorker>();
 
-    let fuse_tx = tx.clone();
-    let session = fuser::spawn_mount2(
-        HelloFS::new(fuse_tx),
-        mountpoint,
-        &options,
-    ).unwrap();
+        let fuse_tx = send_result.clone();
+        let session = fuser::spawn_mount2(
+            HelloFS::new(fuse_tx),
+            mountpoint,
+            &options,
+        ).unwrap();
 
-    let ctrlc_tx = tx.clone();
-    ctrlc::set_handler(move || {
-        ctrlc_tx.send(Status::Killed).unwrap();
-    }).unwrap();
+        let ctrlc_tx = send_result.clone();
+        ctrlc::set_handler(move || {
+            ctrlc_tx.send(MessageToMain::Killed).unwrap();
+        }).unwrap();
 
-    // TODO very unlikely race condition as we start starting factorio before mounting the output directory
-    let _xvfb = ChildGuard(std::process::Command::new("Xvfb")
-        .arg(":8")
-        .arg("-screen")
-        .arg(",0")
-        .arg("1024x768x16")
-        .spawn()
-        .unwrap());
-    let _factorio = ChildGuard(std::process::Command::new("./factorio/bin/x64/factorio")
-        .env("DISPLAY", ":8")
-        .arg("--disable-audio")
-        .arg("--disable-migration-window")
-        .arg("--load-game")
-        .arg("maps/e752be9eade5aa80de908f825382e3bd98e0d29a4c7ffa07a7c0071f92ac39ad.zip")
-        //.arg("maps/91c009e61f44c3c532f7152b0501ea0fc920723148dd1c38c4da129eb9d399f9.zip")
-        //.stdout(std::process::Stdio::null()) // TODO scan output for errors?
-        .spawn()
-        .unwrap());
+        // TODO very unlikely race condition as we start starting factorio before mounting the output directory
+        let _xvfb = ChildGuard(std::process::Command::new("Xvfb")
+            .arg(":8")
+            .arg("-screen")
+            .arg(",0")
+            .arg("1024x768x16")
+            .spawn()
+            .unwrap());
+        let _factorio = ChildGuard(std::process::Command::new("./factorio/bin/x64/factorio")
+            .env("DISPLAY", ":8")
+            .arg("--disable-audio")
+            .arg("--disable-migration-window")
+            .arg("--load-game")
+            //.arg("maps/1c98b2430bf2c15c78808092871b671e7baed29c1869be652b7b8af1e6aaff40.zip") // small
+            //.arg("maps/e752be9eade5aa80de908f825382e3bd98e0d29a4c7ffa07a7c0071f92ac39ad.zip") // medium
+            .arg("maps/91c009e61f44c3c532f7152b0501ea0fc920723148dd1c38c4da129eb9d399f9.zip") // large
+            //.stdout(std::process::Stdio::null()) // TODO scan output for errors?
+            .spawn()
+            .unwrap());
 
-    let status = rx.recv().unwrap();
-    match status {
-        Status::Killed => {
-            println!("killed");
+
+
+
+
+        let mut thread_context = None;
+
+        for i in 0..32 {
+            let recv_work = recv_work.clone();
+            let send_result = send_result.clone();
+            scope.spawn(move |_| {
+                while let Ok(work) = recv_work.recv() {
+                    //println!("Thread #{i} recieved work");
+                    match work {
+                        MessageToWorker::TileWriteParts { surface, tile, image } => {
+                            ThreadContext::tile_write_parts(&surface, &tile, &image);
+                            send_result.send(MessageToMain::FinishWriteParts {
+                                tile,
+                                image,
+                            }).unwrap();
+                        }
+                        MessageToWorker::TileBuildParent { parent, children } => {
+                            let mut full_size = DynamicImage::new_rgba8(TILE_SIZE * 2, TILE_SIZE * 2);
+                            for (tile, img) in children {
+                                full_size.copy_from(&img, (tile.x - parent.x * 2) as u32 * TILE_SIZE, (tile.y - parent.y * 2) as u32 * TILE_SIZE).unwrap();
+                            }
+
+                            let image = ThreadContext::image_resize(full_size);
+
+                            send_result.send(MessageToMain::FinishBuildParent {
+                                parent,
+                                image,
+                            }).unwrap();
+                        }
+                    }
+                }
+                println!("exit thread #{i}");
+            });
         }
-        Status::Finished => {
-            println!("finished");
+
+        while let Ok(status) = recv_result.recv() {
+            match status {
+                MessageToMain::Killed => {
+                    println!("killed");
+                    break;
+                }
+                MessageToMain::Finished => {
+                    println!("finished");
+                    break;
+                }
+                MessageToMain::File(file) => {
+                    if file.path == "info.json" {
+                        let info_exists = thread_context.is_none();
+                        assert!(info_exists, "SurfaceInfo already exists");
+                        let surface_info: SurfaceInfo = serde_json::from_slice(&file.data).unwrap();
+                        //println!("{:?}", &surface_info);
+
+                        thread_context = Some(ThreadContext::new(surface_info));
+                    } else if file.path.ends_with(".png") {
+                        let img = image::load_from_memory(&file.data).unwrap();
+
+                        let mut split = Path::new(&file.path)
+                            .file_stem()
+                            .and_then(std::ffi::OsStr::to_str)
+                            .unwrap()
+                            .split(",");
+                        let surface_name = split.next().unwrap().to_owned();
+                        let x = split.next().unwrap().parse::<i32>().unwrap();
+                        let y = split.next().unwrap().parse::<i32>().unwrap();
+
+                        let tc = thread_context.as_mut().unwrap();
+
+                        send_work.send(MessageToWorker::TileWriteParts {
+                            surface: tc.surface_info.name.to_owned(),
+                            tile: Tile {
+                                x,
+                                y,
+                                zoom: MAX_ZOOM,
+                            },
+                            image: img,
+                        }).unwrap();
+                    }
+                }
+                MessageToMain::FinishWriteParts { tile, image } => {
+                    let tc = thread_context.as_mut().unwrap();
+                    tc.progress();
+
+                    if tc.loaded_tiles == tc.total_tiles {
+                        println!("finished");
+                        send_result.send(MessageToMain::Finished).unwrap();
+                    }
+
+                    tc.tiles.insert(tile.clone(), TileState::Loaded(image));
+
+                    let parent = tile.zoom_out();
+                    if parent.zoom > MIN_ZOOM && tc.tile_ready(&parent) {
+                        let mut children: Vec<(Tile, DynamicImage)> = vec![];
+                        for tile in parent.children().into_iter() {
+                            if let Some(state) = tc.tiles.get_mut(&tile) {
+                                children.push((tile.clone(), state.take()));
+                            }
+                        }
+
+                        send_work.send(MessageToWorker::TileBuildParent {
+                            parent,
+                            children,
+                        }).unwrap();
+                    }
+                }
+                MessageToMain::FinishBuildParent { parent, image } => {
+                    let tc = thread_context.as_mut().unwrap();
+                    send_work.send(MessageToWorker::TileWriteParts {
+                        surface: tc.surface_info.name.to_owned(),
+                        tile: parent,
+                        image,
+                    }).unwrap();
+                }
+            }
         }
+
+        session.join();
+    });
+    if let Err(err) = res {
+        println!("{:?}", err);
     }
-
-    session.join();
 }
 
 fn main() {
