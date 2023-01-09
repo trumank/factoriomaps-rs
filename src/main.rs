@@ -19,6 +19,8 @@ use image::{DynamicImage, GenericImage, GenericImageView};
 use fast_image_resize as fr;
 use webp::*;
 
+use include_dir::{include_dir, Dir};
+
 use libc::ENOENT;
 use fuser::{MountOption, FileType, FileAttr, Filesystem, Request, ReplyEntry, ReplyAttr, ReplyWrite, ReplyCreate, ReplyEmpty};
 
@@ -28,6 +30,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 const TILE_SIZE: u32 = 1024;
 const MAX_ZOOM: i32 = 20;
 const MIN_ZOOM: i32 = 12;
+static WEB: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/web");
 
 const TTL: Duration = Duration::from_secs(1);
 const BLOCK_SIZE: u64 = 512;
@@ -441,6 +444,34 @@ impl Drop for ChildGuard {
     }
 }
 
+fn extract_dir<S: AsRef<Path>>(dir: &Dir, base_path: S, find_replace: &HashMap<String, String>) -> std::io::Result<()> {
+    let base_path = base_path.as_ref();
+
+    for entry in dir.entries() {
+        let path = base_path.join(entry.path());
+
+        match entry {
+            include_dir::DirEntry::Dir(d) => {
+                fs::create_dir_all(&path)?;
+                extract_dir(d, base_path, &find_replace)?;
+            }
+            include_dir::DirEntry::File(f) => {
+                if let Some(utf8) = f.contents_utf8() {
+                    let mut contents = utf8.to_owned();
+                    for (find, replace) in find_replace.iter() {
+                        contents = contents.replace(find, replace);
+                    }
+                    fs::write(path, contents.as_bytes())?;
+                } else {
+                    fs::write(path, f.contents())?;
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 #[derive(clap::Parser)]
 struct Args {
    #[command(subcommand)]
@@ -625,15 +656,16 @@ fn render(factorio: PathBuf, output: PathBuf) {
 
                     if tc.loaded_tiles == tc.total_tiles {
                         let mut info = vec![];
-                        for (tile, state) in &tc.tiles {
+                        for (tile, _) in &tc.tiles {
                             for part in get_tile_parts() {
                                 let comp = part.get_path_components(tile);
                                 info.push(comp);
                             }
                         }
 
-                        std::fs::create_dir_all(&*output_path).unwrap();
-                        std::fs::write(output_path.join("map.json"), serde_json::to_string(&info).unwrap()).unwrap();
+                        let mut find_replace = HashMap::new();
+                        find_replace.insert("$MAP_DATA$".to_owned(), serde_json::to_string(&info).unwrap());
+                        extract_dir(&WEB, &*output_path, &find_replace).unwrap();
 
                         send_result.send(MessageToMain::Finished).unwrap();
                     }
