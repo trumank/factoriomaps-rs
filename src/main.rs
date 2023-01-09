@@ -481,8 +481,12 @@ struct Args {
 #[derive(clap::Subcommand)]
 enum Action {
    Render {
+       /// Factorio directory root
        factorio: String,
+       /// Render output path
        output: String,
+       /// Path to map to render
+       map: String,
    }
 }
 
@@ -491,13 +495,13 @@ fn main() {
 
     let args = Args::parse().action;
     match args {
-        Action::Render { factorio, output } => {
-            render(PathBuf::from(factorio), PathBuf::from(output));
+        Action::Render { factorio, output, map } => {
+            render(PathBuf::from(factorio), PathBuf::from(output), map);
         },
     }
 }
 
-fn render(factorio: PathBuf, output: PathBuf) {
+fn render(factorio: PathBuf, output: PathBuf, map: String) {
     let res = crossbeam::scope(|scope| {
         let mountpoint = factorio.join("script-output");
 
@@ -523,7 +527,7 @@ fn render(factorio: PathBuf, output: PathBuf) {
 
         // TODO very unlikely race condition as we start starting factorio before mounting the output directory
         let _xvfb = ChildGuard(std::process::Command::new("Xvfb")
-            .arg(":8")
+            .arg(":8") // TODO don't assume :8 isn't being used
             .arg("-screen")
             .arg(",0")
             .arg("1024x768x16")
@@ -534,16 +538,14 @@ fn render(factorio: PathBuf, output: PathBuf) {
             .arg("--disable-audio")
             .arg("--disable-migration-window")
             .arg("--load-game")
-            .arg("maps/1c98b2430bf2c15c78808092871b671e7baed29c1869be652b7b8af1e6aaff40.zip") // small
-            //.arg("maps/e752be9eade5aa80de908f825382e3bd98e0d29a4c7ffa07a7c0071f92ac39ad.zip") // medium
-            //.arg("maps/91c009e61f44c3c532f7152b0501ea0fc920723148dd1c38c4da129eb9d399f9.zip") // large
+            .arg(map)
             //.stdout(std::process::Stdio::null()) // TODO scan output for errors?
             .spawn()
             .unwrap());
 
         let mut thread_context = None;
-        //std::fs::create_dir_all(&output.join("web")).unwrap();
         let output_path = Arc::from(output);
+        std::fs::create_dir_all(&*output_path).unwrap();
 
         for _ in 0..std::thread::available_parallelism().unwrap().into() {
             let recv_work = recv_work.clone();
