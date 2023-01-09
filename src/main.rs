@@ -259,7 +259,7 @@ fn get_tile_parts() -> Vec<TilePart> {
 fn tile_write_parts(output_path: &Arc<PathBuf>, surface_name: &String, tile: &Tile, image: &DynamicImage) {
     for part in get_tile_parts() {
         let sub_img = image.view(part.x * PART_SIZE, part.y * PART_SIZE, PART_SIZE, PART_SIZE).to_image();
-        let path = output_path.join("tiles").join(part.get_path(&surface_name, &tile));
+        let path = output_path.join("tiles").join(part.get_path(surface_name, tile));
         fs::create_dir_all(path.parent().unwrap()).unwrap();
 
         let dyn_img = DynamicImage::from(sub_img);
@@ -466,7 +466,7 @@ fn extract_dir<S: AsRef<Path>>(dir: &Dir, base_path: S, find_replace: &HashMap<S
         match entry {
             include_dir::DirEntry::Dir(d) => {
                 fs::create_dir_all(&path)?;
-                extract_dir(d, base_path, &find_replace)?;
+                extract_dir(d, base_path, find_replace)?;
             }
             include_dir::DirEntry::File(f) => {
                 if let Some(utf8) = f.contents_utf8() {
@@ -701,7 +701,7 @@ fn render(factorio: PathBuf, output: PathBuf, map: String) {
 
                     if tc.loaded_tiles == tc.total_tiles {
                         let mut info = vec![];
-                        for (tile, _) in &tc.tiles {
+                        for tile in tc.tiles.keys() {
                             for part in get_tile_parts() {
                                 let comp = part.get_path_components(tile);
                                 info.push(comp);
