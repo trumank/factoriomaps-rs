@@ -9,7 +9,7 @@ use std::ffi::OsStr;
 use std::time::{Duration, UNIX_EPOCH};
 
 use rayon::prelude::*;
-use crossbeam_channel::{select, unbounded, bounded};
+use crossbeam_channel::{unbounded};
 
 use serde::{Deserialize, Serialize};
 
@@ -100,7 +100,7 @@ impl Tile {
         }
     }
     /// Returns all child tiles
-    fn children<'a>(&self) -> Vec<Tile> {
+    fn children(&self) -> Vec<Tile> {
         let origin = self.zoom_in();
         vec![
             (0, 0),
@@ -170,7 +170,7 @@ impl ThreadContext {
 
         let progress = ProgressBar::new(tiles.len() as u64);
         progress.set_style(
-        indicatif::ProgressStyle::with_template("{wide_bar} Elapsed: {elapsed_precise}, ETA: {my_eta}").unwrap()
+        ProgressStyle::with_template("{wide_bar} Elapsed: {elapsed_precise}, ETA: {my_eta}").unwrap()
             .with_key("my_eta", |s: &indicatif::ProgressState, w: &mut dyn std::fmt::Write| {
                  match (s.pos(), s.len()) {
                     (pos,Some(len)) => write!(w, "{:#}", humantime::format_duration(std::time::Duration::from_secs(s.elapsed().as_secs() * (len-pos)/pos))),
@@ -227,7 +227,7 @@ impl ThreadContext {
             let dyn_img = DynamicImage::from(sub_img);
             let encoder = Encoder::from_image(&dyn_img).unwrap();
             //let webp = encoder.encode_lossless();
-            let webp = encoder.encode(40.0);
+            let webp = encoder.encode(80.0);
             std::fs::write(Path::new(path_str).with_extension("webp"), &*webp).unwrap();
         });
     }
@@ -333,7 +333,7 @@ impl Filesystem for HelloFS {
         //println!("write() called with {:?} offset={:?} size={:?}", inode, offset, data.len());
 
         use std::io::Write;
-        self.get_file(inode).unwrap().data.write(data).unwrap();
+        self.get_file(inode).unwrap().data.write_all(data).unwrap();
 
         reply.written(data.len() as u32);
         //reply.error(libc::EBADF);
@@ -350,7 +350,7 @@ impl Filesystem for HelloFS {
         reply: ReplyCreate,
     ) {
         //println!("create() called with {:?} {:?}", parent, name);
-        let mut attr = HELLO_TXT_ATTR.clone();
+        let mut attr = HELLO_TXT_ATTR;
         attr.ino = self.create_file(name.to_str().unwrap().to_string());
         attr.size = 0;
         reply.created(&Duration::new(0, 0), &attr, 0, 10, 0);
@@ -379,6 +379,11 @@ enum MessageToMain {
     Finished,
     Killed,
     File(File),
+    FinishReadImage {
+        surface: String,
+        tile: Tile,
+        image: DynamicImage,
+    },
     FinishWriteParts {
         tile: Tile,
         image: DynamicImage,
@@ -390,6 +395,11 @@ enum MessageToMain {
 }
 
 enum MessageToWorker {
+    ReadImage {
+        surface: String,
+        tile: Tile,
+        data: Vec<u8>,
+    },
     TileWriteParts {
         surface: String,
         tile: Tile,
@@ -449,25 +459,28 @@ fn setup_fuse() {
             .arg("--disable-migration-window")
             .arg("--load-game")
             //.arg("maps/1c98b2430bf2c15c78808092871b671e7baed29c1869be652b7b8af1e6aaff40.zip") // small
-            //.arg("maps/e752be9eade5aa80de908f825382e3bd98e0d29a4c7ffa07a7c0071f92ac39ad.zip") // medium
-            .arg("maps/91c009e61f44c3c532f7152b0501ea0fc920723148dd1c38c4da129eb9d399f9.zip") // large
+            .arg("maps/e752be9eade5aa80de908f825382e3bd98e0d29a4c7ffa07a7c0071f92ac39ad.zip") // medium
+            //.arg("maps/91c009e61f44c3c532f7152b0501ea0fc920723148dd1c38c4da129eb9d399f9.zip") // large
             //.stdout(std::process::Stdio::null()) // TODO scan output for errors?
             .spawn()
             .unwrap());
 
-
-
-
-
         let mut thread_context = None;
 
-        for i in 0..32 {
+        for _ in 0..std::thread::available_parallelism().unwrap().into() {
+        //for _ in 0..1 {
             let recv_work = recv_work.clone();
             let send_result = send_result.clone();
             scope.spawn(move |_| {
                 while let Ok(work) = recv_work.recv() {
-                    //println!("Thread #{i} recieved work");
                     match work {
+                        MessageToWorker::ReadImage { surface, tile, data } => {
+                            send_result.send(MessageToMain::FinishReadImage {
+                                surface,
+                                tile,
+                                image: image::load_from_memory(&data).unwrap(),
+                            }).unwrap();
+                        }
                         MessageToWorker::TileWriteParts { surface, tile, image } => {
                             ThreadContext::tile_write_parts(&surface, &tile, &image);
                             send_result.send(MessageToMain::FinishWriteParts {
@@ -490,7 +503,7 @@ fn setup_fuse() {
                         }
                     }
                 }
-                println!("exit thread #{i}");
+                //println!("exit thread #{i}");
             });
         }
 
@@ -509,33 +522,37 @@ fn setup_fuse() {
                         let info_exists = thread_context.is_none();
                         assert!(info_exists, "SurfaceInfo already exists");
                         let surface_info: SurfaceInfo = serde_json::from_slice(&file.data).unwrap();
-                        //println!("{:?}", &surface_info);
 
                         thread_context = Some(ThreadContext::new(surface_info));
                     } else if file.path.ends_with(".png") {
-                        let img = image::load_from_memory(&file.data).unwrap();
-
                         let mut split = Path::new(&file.path)
                             .file_stem()
                             .and_then(std::ffi::OsStr::to_str)
                             .unwrap()
-                            .split(",");
+                            .split(',');
                         let surface_name = split.next().unwrap().to_owned();
                         let x = split.next().unwrap().parse::<i32>().unwrap();
                         let y = split.next().unwrap().parse::<i32>().unwrap();
 
                         let tc = thread_context.as_mut().unwrap();
 
-                        send_work.send(MessageToWorker::TileWriteParts {
+                        send_work.send(MessageToWorker::ReadImage {
                             surface: tc.surface_info.name.to_owned(),
                             tile: Tile {
                                 x,
                                 y,
                                 zoom: MAX_ZOOM,
                             },
-                            image: img,
+                            data: file.data,
                         }).unwrap();
                     }
+                }
+                MessageToMain::FinishReadImage { surface, tile, image } => {
+                    send_work.send(MessageToWorker::TileWriteParts {
+                        surface,
+                        tile,
+                        image,
+                    }).unwrap();
                 }
                 MessageToMain::FinishWriteParts { tile, image } => {
                     let tc = thread_context.as_mut().unwrap();
