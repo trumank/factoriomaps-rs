@@ -1,4 +1,3 @@
-#![feature(nll)]
 #![feature(int_roundings)]
 
 use std::{fs, path::Path};
@@ -221,7 +220,7 @@ impl ThreadContext {
                 y as i32 + tile.y * parts as i32
             );
             let path = Path::new(path_str);
-            fs::create_dir_all(&path.parent().unwrap()).unwrap();
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
             //sub_img.save(&path).unwrap();
 
             let dyn_img = DynamicImage::from(sub_img);
@@ -414,7 +413,7 @@ enum MessageToWorker {
 impl Drop for ChildGuard {
     fn drop(&mut self) {
         match self.0.kill() {
-            Err(e) => println!("Could not kill child process: {}", e),
+            Err(e) => println!("Could not kill child process: {e}"),
             Ok(_) => println!("Successfully killed child process"),
         }
     }
@@ -594,7 +593,7 @@ fn setup_fuse() {
         session.join();
     });
     if let Err(err) = res {
-        println!("{:?}", err);
+        println!("{err:?}");
     }
 }
 
