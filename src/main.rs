@@ -33,6 +33,7 @@ const TILE_SIZE: u32 = 1024;
 const MAX_ZOOM: i32 = 20;
 const MIN_ZOOM: i32 = 12;
 static WEB: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/web");
+static MOD: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/mod");
 
 const TTL: Duration = Duration::from_secs(1);
 const BLOCK_SIZE: u64 = 512;
@@ -73,6 +74,16 @@ const HELLO_TXT_ATTR: FileAttr = FileAttr {
     blksize: BLOCK_SIZE as u32,
     flags: 0,
 };
+
+#[derive(Debug, Serialize, Deserialize)]
+struct FactorioMods {
+    mods: Vec<FactorioModEntry>,
+}
+#[derive(Debug, Serialize, Deserialize)]
+struct FactorioModEntry {
+    name: String,
+    enabled: bool,
+}
 
 #[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Ord, Hash)]
 struct Tile {
@@ -505,12 +516,37 @@ fn main() {
 
 fn render(factorio: PathBuf, output: PathBuf, map: String) {
     let res = crossbeam::scope(|scope| {
+        // check factorio lockfile
         let lockfile = File::open(&factorio.join(".lock")).unwrap();
         lockfile.try_lock_exclusive().expect("Could not open lockfile, is factorio alreayd running?");
         lockfile.unlock().unwrap();
 
-        let mountpoint = factorio.join("script-output");
+        // insert self into factorio mod list and save original to restore later
+        let modname = "factoriomaps-rs";
+        let modlist_path = factorio.join("mods/mod-list.json");
+        let modlist_str = fs::read_to_string(&modlist_path).unwrap();
+        let mut modlist: FactorioMods = serde_json::from_str(&modlist_str).unwrap();
+        let mut found = false;
+        for entry in &mut modlist.mods {
+            if entry.name == modname {
+                entry.enabled = true;
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            modlist.mods.push(FactorioModEntry {
+                name: modname.to_owned(),
+                enabled: true,
+            });
+        }
+        fs::write(&modlist_path, &serde_json::to_vec_pretty(&modlist).unwrap()).unwrap();
+        let mod_path = factorio.join("mods").join(modname);
+        fs::remove_dir_all(&mod_path).ok();
+        fs::create_dir(&mod_path).unwrap();
+        MOD.extract(&mod_path).unwrap();
 
+        let mountpoint = factorio.join("script-output");
         let options = vec![
             MountOption::FSName("fuser".to_string()),
             //MountOption::AutoUnmount,
@@ -690,6 +726,10 @@ fn render(factorio: PathBuf, output: PathBuf, map: String) {
         }
 
         session.join();
+
+        // TODO proper error handling and cleanup
+        fs::write(&modlist_path, modlist_str.as_bytes()).unwrap();
+        fs::remove_dir_all(&mod_path).unwrap();
     });
     if let Err(err) = res {
         println!("{err:?}");
