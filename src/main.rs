@@ -1,8 +1,9 @@
 #![feature(int_roundings)]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::{fs, path::Path};
+use std::fs;
+use std::fs::File;
 use std::collections::HashMap;
 use std::num::NonZeroU32;
 use std::ffi::OsStr;
@@ -10,7 +11,6 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use clap::Parser;
 
-use rayon::prelude::*;
 use crossbeam_channel::unbounded;
 
 use serde::{Deserialize, Serialize};
@@ -23,6 +23,8 @@ use include_dir::{include_dir, Dir};
 
 use libc::ENOENT;
 use fuser::{MountOption, FileType, FileAttr, Filesystem, Request, ReplyEntry, ReplyAttr, ReplyWrite, ReplyCreate, ReplyEmpty};
+
+use fs2::FileExt;
 
 use indicatif::{ProgressBar, ProgressStyle};
 
@@ -294,12 +296,12 @@ fn image_resize(src: DynamicImage) -> DynamicImage {
 }
 
 struct HelloFS {
-    files: HashMap<u64, File>,
+    files: HashMap<u64, FuseFile>,
     next_inode: u64,
     tx: crossbeam::channel::Sender<MessageToMain>,
 }
 
-struct File {
+struct FuseFile {
     path: String,
     data: Vec<u8>,
 }
@@ -315,13 +317,13 @@ impl HelloFS {
 }
 
 impl HelloFS {
-    fn get_file(&mut self, inode: u64) -> Option<&mut File> {
+    fn get_file(&mut self, inode: u64) -> Option<&mut FuseFile> {
         self.files.get_mut(&inode)
     }
     fn create_file(&mut self, path: String) -> u64 {
         let inode = self.next_inode;
         self.next_inode += 1;
-        self.files.insert(inode, File {
+        self.files.insert(inode, FuseFile {
             path,
             data: vec![],
         });
@@ -401,7 +403,7 @@ struct ChildGuard(std::process::Child);
 enum MessageToMain {
     Finished,
     Killed,
-    File(File),
+    File(FuseFile),
     FinishReadImage {
         surface: String,
         tile: Tile,
@@ -503,6 +505,10 @@ fn main() {
 
 fn render(factorio: PathBuf, output: PathBuf, map: String) {
     let res = crossbeam::scope(|scope| {
+        let lockfile = File::open(&factorio.join(".lock")).unwrap();
+        lockfile.try_lock_exclusive().expect("Could not open lockfile, is factorio alreayd running?");
+        lockfile.unlock().unwrap();
+
         let mountpoint = factorio.join("script-output");
 
         let options = vec![
