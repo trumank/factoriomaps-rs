@@ -517,9 +517,10 @@ fn main() {
 fn render(factorio: PathBuf, output: PathBuf, map: String) {
     let res = crossbeam::scope(|scope| {
         // check factorio lockfile
-        let lockfile = File::open(&factorio.join(".lock")).unwrap();
-        lockfile.try_lock_exclusive().expect("Could not open lockfile, is factorio alreayd running?");
-        lockfile.unlock().unwrap();
+        if let Ok(lockfile) = File::open(&factorio.join(".lock")) {
+            lockfile.try_lock_exclusive().expect("Could not open lockfile, is factorio already running?");
+            lockfile.unlock().unwrap();
+        }
 
         // insert self into factorio mod list and save original to restore later
         let modname = "factoriomaps-rs";
