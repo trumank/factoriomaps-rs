@@ -580,7 +580,7 @@ fn render(factorio: PathBuf, output: PathBuf, map: String) {
             .env("DISPLAY", ":8")
             .arg("--disable-audio")
             .arg("--disable-migration-window")
-            .arg("--load-game")
+            .arg("--benchmark-graphics") // use instead of --load-game as it unpauses the game for us
             .arg(map)
             //.stdout(std::process::Stdio::null()) // TODO scan output for errors?
             .spawn()
