@@ -196,6 +196,7 @@ function take_screenshots(player)
     end
 
     -- game.print(serpent.line(get_neighbors(chunks, {x = 0, y = 0})))
+    break -- only one surface for now
   end
 end
 
