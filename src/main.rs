@@ -409,8 +409,6 @@ impl Filesystem for HelloFS {
     }
 }
 
-struct ChildGuard(std::process::Child);
-
 enum MessageToMain {
     Finished,
     Killed,
@@ -448,12 +446,25 @@ enum MessageToWorker {
     },
 }
 
+struct ChildGuard(std::process::Child);
 impl Drop for ChildGuard {
     fn drop(&mut self) {
-        match self.0.kill() {
+        match self.kill() {
+            Err(ref e) if e.kind() == std::io::ErrorKind::InvalidInput => {}, // already exited, do nothing
             Err(e) => println!("Could not kill child process: {e}"),
             Ok(_) => println!("Successfully killed child process"),
         }
+    }
+}
+impl std::ops::Deref for ChildGuard {
+    type Target = std::process::Child;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl std::ops::DerefMut for ChildGuard {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
 }
 
