@@ -31,7 +31,6 @@ use indicatif::{ProgressBar, ProgressStyle};
 //const TILE_SIZE: u32 = 2048;
 const TILE_SIZE: u32 = 1024;
 const MAX_ZOOM: i32 = 20;
-const MIN_ZOOM: i32 = 12;
 static WEB: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/web");
 static MOD: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/mod");
 
@@ -181,6 +180,7 @@ impl TileState {
 struct ThreadContext {
     info: Vec<SurfaceInfo>,
     tiles: HashMap<Tile, TileState>,
+    min_zoom: HashMap<String, i32>,
     progress: ProgressBar,
     loaded_tiles: usize,
     total_tiles: usize,
@@ -188,18 +188,38 @@ struct ThreadContext {
 impl ThreadContext {
     fn new(info: Vec<SurfaceInfo>) -> ThreadContext {
         let mut tiles = HashMap::new();
+        let mut min_zoom = HashMap::new();
 
         for surface in &info {
-            for coord in &surface.chunks {
+            let Some(first) = surface.chunks.iter().next() else {
+                continue;
+            };
+
+            let mut min_x = first.x;
+            let mut max_x = first.x;
+            let mut min_y = first.y;
+            let mut max_y = first.y;
+
+            for chunk in &surface.chunks {
+                min_x = min_x.min(chunk.x);
+                max_x = max_x.max(chunk.x);
+                min_y = min_y.min(chunk.y);
+                max_y = max_y.max(chunk.y)
+            }
+            let max = (1 - min_x).max(1 - min_y).max(max_x).max(max_y);
+            let mz = MAX_ZOOM - max.ilog2() as i32 - 6;
+            min_zoom.insert(surface.name.to_owned(), mz);
+
+            for chunk in &surface.chunks {
                 let mut tile = Tile {
                     surface: surface.name.to_owned(),
-                    x: coord.x,
-                    y: coord.y,
+                    x: chunk.x,
+                    y: chunk.y,
                     zoom: MAX_ZOOM,
                 };
 
                 loop {
-                    if tile.zoom <= MIN_ZOOM || tiles.contains_key(&tile) {
+                    if tile.zoom <= mz || tiles.contains_key(&tile) {
                         break;
                     }
                     tiles.insert(tile.clone() , TileState::Waiting);
@@ -214,6 +234,7 @@ impl ThreadContext {
         ThreadContext {
             info,
             total_tiles: tiles.len(),
+            min_zoom,
             tiles,
             progress,
             loaded_tiles: 0,
@@ -699,7 +720,7 @@ fn render(factorio: PathBuf, output: PathBuf, map: String) {
                     tc.tiles.insert(tile.clone(), TileState::Loaded(image));
 
                     let parent = tile.zoom_out();
-                    if parent.zoom > MIN_ZOOM && tc.tile_ready(&parent) {
+                    if parent.zoom > tc.min_zoom[&tile.surface] && tc.tile_ready(&parent) {
                         let mut children: Vec<(Tile, DynamicImage)> = vec![];
                         for tile in parent.children().into_iter() {
                             if let Some(state) = tc.tiles.get_mut(&tile) {
