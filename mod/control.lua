@@ -57,11 +57,19 @@ function take_screenshots(player)
       -- player.print("area: " .. serpent.line(chunk.area))
 
       local contains_entities = 0 < #surface.find_entities_filtered{area=chunk.area, force=player.force}
+      local contains_tags = false
+      for _, force in pairs(game.forces) do
+        if 0 < #force.find_chart_tags(surface, chunk.area) then
+          contains_tags = true
+          break
+        end
+      end
       chunks[chunk_key(chunk)] = {
         x = chunk.x,
         y = chunk.y,
-        distance = contains_entities and 0 or nil,
+        distance = (contains_entities or contains_tags) and 0 or nil,
         contains_entities = contains_entities,
+        contains_tags = contains_tags,
       }
     end
 
@@ -148,9 +156,22 @@ function take_screenshots(player)
       queue[key] = nil
     end
 
+    -- build tags object
+    local tags = {}
+    for _, force in pairs(game.forces) do
+       local f = map(force.find_chart_tags(surface), function(tag) return {
+        position = tag.position,
+        text = tag.text,
+      } end)
+      if 0 < #f then
+        tags[force.name] = f
+      end
+    end
+
     -- write information about the current surface to a file
     local surface_info = {
       name = surface.name,
+      tags = tags,
       chunks = map(filter(values(chunks), function(chunk) return not chunk.edge end), function(chunk) return {x = chunk.x, y = chunk.y} end),
     }
 

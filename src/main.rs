@@ -137,13 +137,18 @@ impl Tile {
 #[derive(Debug, Serialize, Deserialize)]
 struct SurfaceInfo {
     name: String,
-    chunks: Vec<Coordinate>,
+    tags: HashMap<String, Vec<Tag>>,
+    chunks: Vec<Coordinate<i32>>,
 }
-
 #[derive(Debug, Serialize, Deserialize)]
-struct Coordinate {
-    x: i32,
-    y: i32,
+struct Coordinate<T> {
+    x: T,
+    y: T,
+}
+#[derive(Debug, Serialize, Deserialize)]
+struct Tag {
+    position: Coordinate<f64>,
+    text: String,
 }
 
 enum TileState {
@@ -174,6 +179,7 @@ impl TileState {
 
 #[derive(Debug)]
 struct ThreadContext {
+    info: Vec<SurfaceInfo>,
     tiles: HashMap<Tile, TileState>,
     progress: ProgressBar,
     loaded_tiles: usize,
@@ -206,6 +212,7 @@ impl ThreadContext {
         progress.set_style(ProgressStyle::with_template("{wide_bar} Elapsed: {elapsed_precise}, ETA: {eta_precise}").unwrap());
 
         ThreadContext {
+            info,
             total_tiles: tiles.len(),
             tiles,
             progress,
@@ -707,13 +714,20 @@ fn render(factorio: PathBuf, output: PathBuf, map: String) {
                     }
 
                     if tc.loaded_tiles == tc.total_tiles {
-                        let mut info: HashMap<String, Vec<(i32, i32, i32)>> = Default::default();
+
+                        #[derive(Serialize)]
+                        struct Surface {
+                            tiles: Vec<(i32, i32, i32)>,
+                            tags: HashMap<String, Vec<Tag>>,
+                        }
+
+                        let mut info: HashMap<String, Surface> = std::mem::take(&mut tc.info).into_iter().map(|s| (s.name, Surface {
+                            tiles: Default::default(),
+                            tags: s.tags,
+                        })).collect();
                         for tile in tc.tiles.keys() {
-                            let entry = info.entry(tile.surface.to_owned()).or_default();
-                            for part in get_tile_parts() {
-                                let comp = part.get_path_components(tile);
-                                entry.push(comp);
-                            }
+                            info.get_mut(&tile.surface).unwrap()
+                                .tiles.extend(get_tile_parts().iter().map(|p| p.get_path_components(tile)));
                         }
 
                         let mut find_replace = HashMap::new();
