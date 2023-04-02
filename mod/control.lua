@@ -163,6 +163,9 @@ function take_screenshots(player)
 
   for i, surface_info in pairs(info) do
     local surface = game.surfaces[surface_info.name]
+
+    surface.always_day = true
+
     -- create map tags
     if false then
       for _, tag in pairs(player.force.find_chart_tags(surface)) do
