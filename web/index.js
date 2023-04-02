@@ -3,12 +3,19 @@
 function createLayer(name, surface) {
   const mapInfoMap = new Map(surface.tiles.map(t => [`${t[0]},${t[1]},${t[2]}`, `tiles/${name}/${t[0]}/${t[1]}/${t[2]}.webp`]));
 
+  let minZoom = Number.POSITIVE_INFINITY;
+  let maxZoom = Number.NEGATIVE_INFINITY;
+  for (const tile of surface.tiles) {
+    minZoom = Math.min(minZoom, tile[0]);
+    maxZoom = Math.max(maxZoom, tile[0]);
+  }
+
   const tileLayer = new (L.TileLayer.extend({
     options: {
-      minNativeZoom: 13,
-      maxNativeZoom: 20,
-      minZoom: 10,
-      maxZoom: 20,
+      minNativeZoom: minZoom,
+      maxNativeZoom: maxZoom,
+      minZoom,
+      maxZoom,
       noWrap: true,
       tileSize: 512,
       keepBuffer: 100,
