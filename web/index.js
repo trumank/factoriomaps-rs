@@ -28,18 +28,40 @@ function createLayer(name, surface) {
       return marker;
     });
 
-  return L.layerGroup([tileLayer, ...markers]);
+  return {
+    group: new L.LayerGroup([tileLayer]),
+    tiles: tileLayer,
+    markers: L.layerGroup(markers),
+  };
 }
 
-const layers = Object.fromEntries(Object.entries(mapInfo).map(([name, surface]) => [name, createLayer(name, surface)]));
+const layers = Object.entries(mapInfo).map(
+  ([name, surface]) => [name, createLayer(name, surface)]
+);
 
 const map = L.map('map', {
   center: [0, 0],
   zoom: 16,
-  layers: [Object.values(layers)[0]],
+  layers: [layers[0][1].group],
   fadeAnimation: false,
   zoomAnimation: true,
   crs: L.CRS.Simple,
 });
 
-const layerControl = L.control.layers(layers).addTo(map);
+const tagsLayer = new (L.Layer.extend({
+  onAdd: function(_) {
+    for (const [_, layer] of layers) {
+      layer.markers.addTo(layer.group);
+    }
+  },
+  onRemove: function(_) {
+    for (const [_, layer] of layers) {
+      layer.markers.removeFrom(layer.group);
+    }
+  },
+}));
+
+const layerControl = L.control.layers(
+  Object.fromEntries(layers.map(([name, surface]) => [name, surface.group])),
+  {tags: tagsLayer},
+).addTo(map);
