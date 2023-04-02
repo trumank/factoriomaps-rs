@@ -562,6 +562,13 @@ fn render(factorio: PathBuf, output: PathBuf, map: String) {
             lockfile.unlock().unwrap();
         }
 
+        let mut sync_mods = ChildGuard(std::process::Command::new(factorio.join("bin/x64/factorio"))
+            .arg("--sync-mods")
+            .arg(&map)
+            .spawn()
+            .unwrap());
+        sync_mods.wait().unwrap();
+
         // insert self into factorio mod list and save original to restore later
         let modname = "factoriomaps-rs";
         let modlist_path = factorio.join("mods/mod-list.json");
