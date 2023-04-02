@@ -5,9 +5,9 @@ function createLayer(name, surface) {
 
   const tileLayer = new (L.TileLayer.extend({
     options: {
-      minNativeZoom: 12,
+      minNativeZoom: 13,
       maxNativeZoom: 20,
-      minZoom: 12,
+      minZoom: 10,
       maxZoom: 20,
       noWrap: true,
       tileSize: 512,
