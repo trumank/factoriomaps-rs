@@ -1,32 +1,39 @@
 "use strict";
 
+const chunkSize = 1 / 1024;
+const tileSize = chunkSize / 32;
+
 function createLayer(name, surface) {
   const mapInfoMap = new Map(surface.tiles.map(t => [`${t[0]},${t[1]},${t[2]}`, `tiles/${name}/${t[0]}/${t[1]}/${t[2]}.webp`]));
 
-  let minZoom = Number.POSITIVE_INFINITY;
-  let maxZoom = Number.NEGATIVE_INFINITY;
-  for (const tile of surface.tiles) {
-    minZoom = Math.min(minZoom, tile[0]);
-    maxZoom = Math.max(maxZoom, tile[0]);
-  }
+  const zooms = surface.tiles.map(t => t[0]);
+  const minZoom = Math.min(...zooms);
+  const maxZoom = Math.max(...zooms);
+  const bounds = L.latLngBounds(surface.tiles
+    .filter(([z]) => z == maxZoom)
+    .flatMap(([_, x, y]) => [[x, y], [x + 1, y + 1]])
+    .map(([x, y]) => [-y * chunkSize / 2, x * chunkSize / 2]));
 
   const tileLayer = new (L.TileLayer.extend({
+    name,
     options: {
       minNativeZoom: minZoom,
       maxNativeZoom: maxZoom,
-      minZoom,
+      minZoom: minZoom,
       maxZoom,
+      bounds,
       noWrap: true,
       tileSize: 512,
       keepBuffer: 100,
     },
     getTileUrl: function(c) {
       return mapInfoMap.get(`${c.z},${c.x},${c.y}`) || '';
-    }
+    },
+    onAdd: function(map) {
+      L.TileLayer.prototype.onAdd.call(this, map);
+      map.fitBounds(this.options.bounds); // animate = false causes weird things to happen
+    },
   }));
-
-  const chunkSize = 1 / 1024;
-  const tileSize = chunkSize / 32;
 
   const markers = Object.values(surface.tags).flat()
     .map(tag => {
