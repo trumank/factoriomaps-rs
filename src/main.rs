@@ -87,6 +87,7 @@ struct FactorioModEntry {
 
 #[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Ord, Hash)]
 struct Tile {
+    surface: String,
     zoom: i32,
     x: i32,
     y: i32,
@@ -96,6 +97,7 @@ impl Tile {
     /// Returns tile containing this tile
     fn zoom_out(&self) -> Tile {
         Tile {
+            surface: self.surface.to_owned(),
             zoom: self.zoom - 1,
             x: self.x.div_floor(2),
             y: self.y.div_floor(2),
@@ -104,6 +106,7 @@ impl Tile {
     /// Returns tile inside this tile with the smallest coordinates
     fn zoom_in(&self) -> Tile {
         Tile {
+            surface: self.surface.to_owned(),
             zoom: self.zoom + 1,
             x: self.x * 2,
             y: self.y * 2,
@@ -112,6 +115,7 @@ impl Tile {
     /// Returns translated Tile offset
     fn translate(&self, x: i32, y: i32) -> Tile {
         Tile {
+            surface: self.surface.to_owned(),
             zoom: self.zoom,
             x: self.x + x,
             y: self.y + y,
@@ -142,11 +146,19 @@ struct Coordinate {
     y: i32,
 }
 
-#[derive(Debug)]
 enum TileState {
     Loaded(DynamicImage),
     Waiting,
     Processed,
+}
+impl std::fmt::Debug for TileState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", match self {
+            TileState::Loaded(_) => "Loaded",
+            TileState::Waiting => "Waiting",
+            TileState::Processed => "Processed",
+        })
+    }
 }
 
 impl TileState {
@@ -162,45 +174,38 @@ impl TileState {
 
 #[derive(Debug)]
 struct ThreadContext {
-    surface_info: SurfaceInfo,
     tiles: HashMap<Tile, TileState>,
     progress: ProgressBar,
     loaded_tiles: usize,
     total_tiles: usize,
 }
 impl ThreadContext {
-    fn new(surface_info: SurfaceInfo) -> ThreadContext {
+    fn new(info: Vec<SurfaceInfo>) -> ThreadContext {
         let mut tiles = HashMap::new();
 
-        for coord in &surface_info.chunks {
-            let mut tile = Tile {
-                x: coord.x,
-                y: coord.y,
-                zoom: MAX_ZOOM,
-            };
+        for surface in &info {
+            for coord in &surface.chunks {
+                let mut tile = Tile {
+                    surface: surface.name.to_owned(),
+                    x: coord.x,
+                    y: coord.y,
+                    zoom: MAX_ZOOM,
+                };
 
-            loop {
-                if tile.zoom <= MIN_ZOOM || tiles.contains_key(&tile) {
-                    break;
+                loop {
+                    if tile.zoom <= MIN_ZOOM || tiles.contains_key(&tile) {
+                        break;
+                    }
+                    tiles.insert(tile.clone() , TileState::Waiting);
+                    tile = tile.zoom_out();
                 }
-                tiles.insert(tile.clone() , TileState::Waiting);
-                tile = tile.zoom_out();
             }
         }
 
         let progress = ProgressBar::new(tiles.len() as u64);
-        progress.set_style(
-        ProgressStyle::with_template("{wide_bar} Elapsed: {elapsed_precise}, ETA: {my_eta}").unwrap()
-            .with_key("my_eta", |s: &indicatif::ProgressState, w: &mut dyn std::fmt::Write| {
-                 match (s.pos(), s.len()) {
-                    (pos,Some(len)) => write!(w, "{:#}", humantime::format_duration(std::time::Duration::from_secs(s.elapsed().as_secs() * (len-pos)/pos))),
-                    _ => write!(w, "-"),
-                }.unwrap()
-            })
-        );
+        progress.set_style(ProgressStyle::with_template("{wide_bar} Elapsed: {elapsed_precise}, ETA: {eta_precise}").unwrap());
 
         ThreadContext {
-            surface_info,
             total_tiles: tiles.len(),
             tiles,
             progress,
@@ -236,11 +241,11 @@ impl TilePart {
             self.y as i32 + tile.y * NUM_PARTS as i32,
         )
     }
-    fn get_path(&self, surface_name: &String, tile: &Tile) -> String {
+    fn get_path(&self, tile: &Tile) -> String {
         let components = self.get_path_components(tile);
         format!(
             "{}/{}/{}/{}.webp",
-            surface_name,
+            tile.surface,
             components.0,
             components.1,
             components.2,
@@ -256,10 +261,10 @@ fn get_tile_parts() -> Vec<TilePart> {
     }
     parts
 }
-fn tile_write_parts(output_path: &Arc<PathBuf>, surface_name: &String, tile: &Tile, image: &DynamicImage) {
+fn tile_write_parts(output_path: &Arc<PathBuf>, tile: &Tile, image: &DynamicImage) {
     for part in get_tile_parts() {
         let sub_img = image.view(part.x * PART_SIZE, part.y * PART_SIZE, PART_SIZE, PART_SIZE).to_image();
-        let path = output_path.join("tiles").join(part.get_path(surface_name, tile));
+        let path = output_path.join("tiles").join(part.get_path(tile));
         fs::create_dir_all(path.parent().unwrap()).unwrap();
 
         let dyn_img = DynamicImage::from(sub_img);
@@ -359,7 +364,7 @@ impl Filesystem for HelloFS {
         _req: &Request,
         inode: u64,
         _fh: u64,
-        offset: i64,
+        _offset: i64,
         data: &[u8],
         _write_flags: u32,
         #[allow(unused_variables)] flags: i32,
@@ -414,12 +419,10 @@ enum MessageToMain {
     Killed,
     File(FuseFile),
     FinishReadImage {
-        surface: String,
         tile: Tile,
         image: DynamicImage,
     },
     FinishWriteParts {
-        surface: String,
         tile: Tile,
         image: DynamicImage,
     },
@@ -431,12 +434,10 @@ enum MessageToMain {
 
 enum MessageToWorker {
     ReadImage {
-        surface: String,
         tile: Tile,
         data: Vec<u8>,
     },
     TileWriteParts {
-        surface: String,
         tile: Tile,
         image: DynamicImage,
     },
@@ -597,7 +598,6 @@ fn render(factorio: PathBuf, output: PathBuf, map: String) {
             .spawn()
             .unwrap());
 
-        let mut thread_context = None;
         let output_path = Arc::from(output);
         std::fs::create_dir_all(&*output_path).unwrap();
 
@@ -608,17 +608,15 @@ fn render(factorio: PathBuf, output: PathBuf, map: String) {
             scope.spawn(move |_| {
                 while let Ok(work) = recv_work.recv() {
                     match work {
-                        MessageToWorker::ReadImage { surface, tile, data } => {
+                        MessageToWorker::ReadImage { tile, data } => {
                             send_result.send(MessageToMain::FinishReadImage {
-                                surface,
                                 tile,
                                 image: image::load_from_memory(&data).unwrap(),
                             }).unwrap();
                         }
-                        MessageToWorker::TileWriteParts { surface, tile, image } => {
-                            tile_write_parts(&arc, &surface, &tile, &image);
+                        MessageToWorker::TileWriteParts { tile, image } => {
+                            tile_write_parts(&arc, &tile, &image);
                             send_result.send(MessageToMain::FinishWriteParts {
-                                surface,
                                 tile,
                                 image,
                             }).unwrap();
@@ -642,6 +640,8 @@ fn render(factorio: PathBuf, output: PathBuf, map: String) {
             });
         }
 
+        let mut thread_context = None;
+
         while let Ok(status) = recv_result.recv() {
             match status {
                 MessageToMain::Killed => {
@@ -656,24 +656,21 @@ fn render(factorio: PathBuf, output: PathBuf, map: String) {
                     if file.path == "info.json" {
                         let info_exists = thread_context.is_none();
                         assert!(info_exists, "SurfaceInfo already exists");
-                        let surface_info: SurfaceInfo = serde_json::from_slice(&file.data).unwrap();
-
-                        thread_context = Some(ThreadContext::new(surface_info));
+                        let info = serde_json::from_slice(&file.data).unwrap();
+                        thread_context = Some(ThreadContext::new(info));
                     } else if file.path.ends_with(".png") {
                         let mut split = Path::new(&file.path)
                             .file_stem()
                             .and_then(std::ffi::OsStr::to_str)
                             .unwrap()
                             .split(',');
-                        let surface_name = split.next().unwrap().to_owned();
+                        let surface = split.next().unwrap().to_owned();
                         let x = split.next().unwrap().parse::<i32>().unwrap();
                         let y = split.next().unwrap().parse::<i32>().unwrap();
 
-                        let tc = thread_context.as_mut().unwrap();
-
                         send_work.send(MessageToWorker::ReadImage {
-                            surface: tc.surface_info.name.to_owned(),
                             tile: Tile {
+                                surface,
                                 x,
                                 y,
                                 zoom: MAX_ZOOM,
@@ -682,14 +679,13 @@ fn render(factorio: PathBuf, output: PathBuf, map: String) {
                         }).unwrap();
                     }
                 }
-                MessageToMain::FinishReadImage { surface, tile, image } => {
+                MessageToMain::FinishReadImage { tile, image } => {
                     send_work.send(MessageToWorker::TileWriteParts {
-                        surface,
                         tile,
                         image,
                     }).unwrap();
                 }
-                MessageToMain::FinishWriteParts { surface, tile, image } => {
+                MessageToMain::FinishWriteParts { tile, image } => {
                     let tc = thread_context.as_mut().unwrap();
                     tc.progress();
 
@@ -711,11 +707,12 @@ fn render(factorio: PathBuf, output: PathBuf, map: String) {
                     }
 
                     if tc.loaded_tiles == tc.total_tiles {
-                        let mut info = vec![];
+                        let mut info: HashMap<String, Vec<(i32, i32, i32)>> = Default::default();
                         for tile in tc.tiles.keys() {
+                            let entry = info.entry(tile.surface.to_owned()).or_default();
                             for part in get_tile_parts() {
                                 let comp = part.get_path_components(tile);
-                                info.push(comp);
+                                entry.push(comp);
                             }
                         }
 
@@ -727,9 +724,7 @@ fn render(factorio: PathBuf, output: PathBuf, map: String) {
                     }
                 }
                 MessageToMain::FinishBuildParent { parent, image } => {
-                    let tc = thread_context.as_mut().unwrap();
                     send_work.send(MessageToWorker::TileWriteParts {
-                        surface: tc.surface_info.name.to_owned(),
                         tile: parent,
                         image,
                     }).unwrap();

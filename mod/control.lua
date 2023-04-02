@@ -46,6 +46,8 @@ function get_neighbors(chunks, chunk)
 end
 
 function take_screenshots(player)
+  local info = {}
+
   for name, surface in pairs(game.surfaces) do
     local chunks = {}
 
@@ -151,8 +153,16 @@ function take_screenshots(player)
       name = surface.name,
       chunks = map(filter(values(chunks), function(chunk) return not chunk.edge end), function(chunk) return {x = chunk.x, y = chunk.y} end),
     }
-    game.write_file('info.json', game.table_to_json(surface_info))
 
+    -- omit surface entirely if there are no visible chunks
+    if #surface_info.chunks > 0 then
+      table.insert(info, surface_info)
+    end
+  end
+  game.write_file('info.json', game.table_to_json(info))
+
+  for i, surface_info in pairs(info) do
+    local surface = game.surfaces[surface_info.name]
     -- create map tags
     if false then
       for _, tag in pairs(player.force.find_chart_tags(surface)) do
@@ -181,14 +191,14 @@ function take_screenshots(player)
       end
       -- print(serpent.block(chunks))
     else
-      for _, chunk in pairs(chunks) do
+      for _, chunk in pairs(surface_info.chunks) do
         if not chunk.edge then
           game.take_screenshot({
             surface = surface,
             position = {chunk.x * 32 + 16, chunk.y * 32 + 16},
             resolution = {1024, 1024},
             zoom = 1,
-            path = name .. ',' .. chunk.x .. ',' .. chunk.y .. '.png',
+            path = surface.name .. ',' .. chunk.x .. ',' .. chunk.y .. '.png',
             show_entity_info = true
           })
         end
@@ -196,7 +206,6 @@ function take_screenshots(player)
     end
 
     -- game.print(serpent.line(get_neighbors(chunks, {x = 0, y = 0})))
-    break -- only one surface for now
   end
 end
 
