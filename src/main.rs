@@ -540,6 +540,10 @@ enum Action {
        output: String,
        /// Path to map to render
        map: String,
+       /// By default Xvfb will be used to run factorio in the background. Set this flag to make
+       /// the window visible
+       #[clap(long, short)]
+       debug: bool,
    }
 }
 
@@ -548,13 +552,13 @@ fn main() {
 
     let args = Args::parse().action;
     match args {
-        Action::Render { factorio, output, map } => {
-            render(PathBuf::from(factorio), PathBuf::from(output), map);
+        Action::Render { factorio, output, map, debug } => {
+            render(PathBuf::from(factorio), PathBuf::from(output), map, debug);
         },
     }
 }
 
-fn render(factorio: PathBuf, output: PathBuf, map: String) {
+fn render(factorio: PathBuf, output: PathBuf, map: String, debug: bool) {
     let res = crossbeam::scope(|scope| {
         // check factorio lockfile
         if let Ok(lockfile) = File::open(&factorio.join(".lock")) {
@@ -615,19 +619,28 @@ fn render(factorio: PathBuf, output: PathBuf, map: String) {
             ctrlc_tx.send(MessageToMain::Killed).unwrap();
         }).unwrap();
 
-        // TODO very unlikely race condition as we start starting factorio before mounting the output directory
-        let _xvfb = ChildGuard(std::process::Command::new("Xvfb")
-            .arg(":8") // TODO don't assume :8 isn't being used
-            .arg("-screen")
-            .arg(",0")
-            .arg("1024x768x16")
-            .spawn()
-            .unwrap());
-        let _factorio = ChildGuard(std::process::Command::new(factorio.join("bin/x64/factorio"))
-            .env("DISPLAY", ":8")
+        let mut factorio_cmd = std::process::Command::new(factorio.join("bin/x64/factorio"));
+
+        let _xvfb = if !debug {
+            factorio_cmd.env("DISPLAY", ":8");
+
+            Some(ChildGuard(std::process::Command::new("Xvfb")
+                .arg(":8") // TODO don't assume :8 isn't being used
+                .arg("-screen")
+                .arg(",0")
+                .arg("1024x768x16")
+                .spawn()
+                .unwrap()))
+        } else {
+            None
+        };
+
+        let _factorio = ChildGuard(factorio_cmd
             .arg("--disable-audio")
             .arg("--disable-migration-window")
-            .arg("--benchmark-graphics") // use instead of --load-game as it unpauses the game for us
+            // --benchmark-graphics unpauses the game, but swollows errors
+            // --load-game is to figure out why something broke
+            .arg(if debug { "--load-game" } else { "--benchmark-graphics" } )
             .arg(map)
             //.stdout(std::process::Stdio::null()) // TODO scan output for errors?
             .spawn()
