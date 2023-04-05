@@ -548,8 +548,6 @@ enum Action {
 }
 
 fn main() {
-    env_logger::init();
-
     let args = Args::parse().action;
     match args {
         Action::Render { factorio, output, map, debug } => {
