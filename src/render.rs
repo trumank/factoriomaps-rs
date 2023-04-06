@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::num::NonZeroU32;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crossbeam::channel::{Receiver, Sender};
 use crossbeam::thread::Scope;
@@ -22,11 +22,21 @@ const MAX_ZOOM: i32 = 20;
 const NUM_PARTS: u32 = 2;
 const PART_SIZE: u32 = TILE_SIZE / NUM_PARTS;
 
+pub const FBRS_OUTPUT: &str = "FBRS_OUTPUT";
+
 static WEB: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/web");
 
 pub struct VirtualFile {
-    pub path: String,
+    pub path: PathBuf,
     pub data: Vec<u8>,
+}
+impl VirtualFile {
+    pub fn new<P: AsRef<Path>>(path: P) -> Self {
+        Self {
+            path: path.as_ref().to_path_buf(),
+            data: vec![],
+        }
+    }
 }
 pub enum MessageToMain {
     Finished,
@@ -410,13 +420,14 @@ pub fn main_loop<P: AsRef<Path>>(
                 break;
             }
             MessageToMain::File(file) => {
-                if file.path == "info.json" {
+                if file.path.file_name() == Some(std::ffi::OsStr::new("info.json")) {
                     let info_exists = thread_context.is_none();
                     assert!(info_exists, "SurfaceInfo already exists");
                     let info = serde_json::from_slice(&file.data).unwrap();
                     thread_context = Some(ThreadContext::new(info));
-                } else if file.path.ends_with(".png") {
-                    let mut split = Path::new(&file.path)
+                } else if file.path.extension() == Some(std::ffi::OsStr::new("png")) {
+                    let mut split = file
+                        .path
                         .file_stem()
                         .and_then(std::ffi::OsStr::to_str)
                         .unwrap()

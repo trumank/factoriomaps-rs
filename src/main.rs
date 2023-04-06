@@ -102,7 +102,7 @@ impl HelloFS {
     fn create_file(&mut self, path: String) -> u64 {
         let inode = self.next_inode;
         self.next_inode += 1;
-        self.files.insert(inode, VirtualFile { path, data: vec![] });
+        self.files.insert(inode, VirtualFile::new(path));
         inode
     }
 }
@@ -315,7 +315,7 @@ impl Drop for SetupGuard {
 }
 
 fn render_ldpreload(action: ActionRenderLdPreload) {
-    let res = crossbeam::scope(|scope| {
+    crossbeam::scope(|_| {
         let ActionRenderLdPreload {
             factorio,
             output,
@@ -342,9 +342,10 @@ fn render_ldpreload(action: ActionRenderLdPreload) {
             None
         };
 
-        let _factorio = ChildGuard(
+        let mut factorio = ChildGuard(
             factorio_cmd
                 .env("LD_PRELOAD", "./target/release/libfactoriomaps_rs.so")
+                .env(render::FBRS_OUTPUT, output)
                 .arg("--disable-audio")
                 .arg("--disable-migration-window")
                 // --benchmark-graphics unpauses the game, but swollows errors
@@ -360,24 +361,22 @@ fn render_ldpreload(action: ActionRenderLdPreload) {
                 .unwrap(),
         );
 
-        let (send_result, recv_result) = unbounded::<MessageToMain>();
+        let (tx, rx) = unbounded::<()>();
 
-        let ctrlc_tx = send_result.clone();
+        let ctrlc_tx = tx.clone();
         ctrlc::set_handler(move || {
-            ctrlc_tx.send(MessageToMain::Killed).unwrap();
+            ctrlc_tx.send(()).unwrap();
         })
         .unwrap();
 
-        while let Ok(status) = recv_result.recv() {
-            match status {
-                MessageToMain::Killed => {
-                    println!("killed");
-                    break;
-                }
-                _ => {}
-            }
-        }
-    });
+        std::thread::spawn(move || {
+            factorio.wait().unwrap();
+            tx.send(()).unwrap();
+        });
+
+        rx.recv().unwrap()
+    })
+    .unwrap();
 }
 
 fn render_fuse(action: ActionRenderFuse) {
