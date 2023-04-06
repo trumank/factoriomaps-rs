@@ -36,6 +36,7 @@ struct Args {
 enum Action {
     #[cfg(feature = "fuse")]
     RenderFuse(ActionRenderFuse),
+    #[cfg(feature = "ldpreload")]
     RenderLdPreload(ActionRenderLdPreload),
 }
 
@@ -53,6 +54,7 @@ struct ActionRenderFuse {
     #[clap(long, short)]
     debug: bool,
 }
+#[cfg(feature = "ldpreload")]
 #[derive(Parser)]
 struct ActionRenderLdPreload {
     /// Factorio directory root
@@ -74,6 +76,7 @@ fn main() {
         Action::RenderFuse(action) => {
             render_fuse(action);
         }
+        #[cfg(feature = "ldpreload")]
         Action::RenderLdPreload(action) => {
             render_ldpreload(action);
         }
@@ -167,6 +170,7 @@ impl Drop for SetupGuard {
     }
 }
 
+#[cfg(feature = "ldpreload")]
 fn render_ldpreload(action: ActionRenderLdPreload) {
     crossbeam::scope(|_| {
         let ActionRenderLdPreload {

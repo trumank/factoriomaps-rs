@@ -17,7 +17,7 @@ ctrlc = { version = "3.2.5", features = [ "termination" ] }
 fast_image_resize = "2.7.0"
 fs2 = "0.4.3"
 fuser = { version = "0.12.0", optional = true }
-hooky = "0.2.0"
+hooky = { version = "0.2.0", optional = true }
 image = { version = "0.24.6", default-features = false, features = ["png"] }
 include_dir = "0.7.3"
 indicatif = "0.17.3"
@@ -28,4 +28,6 @@ serde_json = "1.0.95"
 webp = "0.2.2"
 
 [features]
+default = ["fuse", "ldpreload"]
 fuse = ["fuser"]
+ldpreload = ["hooky"]
