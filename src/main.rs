@@ -1,9 +1,6 @@
 #![feature(int_roundings)]
 
-#[cfg(feature = "fuse")]
 mod fuse;
-#[cfg(feature = "fuse")]
-mod render;
 
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
@@ -34,13 +31,10 @@ struct Args {
 
 #[derive(Subcommand)]
 enum Action {
-    #[cfg(feature = "fuse")]
     RenderFuse(ActionRenderFuse),
-    #[cfg(feature = "ldpreload")]
     RenderLdPreload(ActionRenderLdPreload),
 }
 
-#[cfg(feature = "fuse")]
 #[derive(Parser)]
 struct ActionRenderFuse {
     /// Factorio directory root
@@ -54,7 +48,6 @@ struct ActionRenderFuse {
     #[clap(long, short)]
     debug: bool,
 }
-#[cfg(feature = "ldpreload")]
 #[derive(Parser)]
 struct ActionRenderLdPreload {
     /// Factorio directory root
@@ -72,11 +65,9 @@ struct ActionRenderLdPreload {
 fn main() {
     let args = Args::parse().action;
     match args {
-        #[cfg(feature = "fuse")]
         Action::RenderFuse(action) => {
             render_fuse(action);
         }
-        #[cfg(feature = "ldpreload")]
         Action::RenderLdPreload(action) => {
             render_ldpreload(action);
         }
@@ -107,6 +98,7 @@ impl std::ops::DerefMut for ChildGuard {
 
 struct SetupGuard {
     mod_path: PathBuf,
+    lib_path: PathBuf,
     modlist_path: PathBuf,
     modlist_str: String,
 }
@@ -153,6 +145,12 @@ impl SetupGuard {
         fs::remove_dir_all(&mod_path).ok();
         fs::create_dir(&mod_path).unwrap();
         MOD.extract(&mod_path).unwrap();
+        let lib_path = mod_path.join("libfactoriomaps_lib.so");
+        fs::write(
+            &lib_path,
+            include_bytes!(env!("CARGO_CDYLIB_FILE_FACTORIOMAPS_LIB")),
+        )
+        .unwrap();
 
         std::fs::create_dir_all(output).unwrap();
 
@@ -160,6 +158,7 @@ impl SetupGuard {
             modlist_path,
             modlist_str,
             mod_path,
+            lib_path,
         }
     }
 }
@@ -170,7 +169,6 @@ impl Drop for SetupGuard {
     }
 }
 
-#[cfg(feature = "ldpreload")]
 fn render_ldpreload(action: ActionRenderLdPreload) {
     crossbeam::scope(|_| {
         let ActionRenderLdPreload {
@@ -179,7 +177,7 @@ fn render_ldpreload(action: ActionRenderLdPreload) {
             map,
             debug,
         } = action;
-        let _setup_guard = SetupGuard::new(&factorio, &output, &map);
+        let setup_guard = SetupGuard::new(&factorio, &output, &map);
 
         let mut factorio_cmd = std::process::Command::new(factorio.join("bin/x64/factorio"));
 
@@ -201,7 +199,7 @@ fn render_ldpreload(action: ActionRenderLdPreload) {
 
         let mut factorio = ChildGuard(
             factorio_cmd
-                .env("LD_PRELOAD", "./target/release/libfactoriomaps_rs.so")
+                .env("LD_PRELOAD", &setup_guard.lib_path)
                 .env("FBRS_OUTPUT", output)
                 .arg("--disable-audio")
                 .arg("--disable-migration-window")
@@ -236,9 +234,8 @@ fn render_ldpreload(action: ActionRenderLdPreload) {
     .unwrap();
 }
 
-#[cfg(feature = "fuse")]
 fn render_fuse(action: ActionRenderFuse) {
-    use render::{MessageToMain, MessageToWorker};
+    use factoriomaps_lib::render::{self, MessageToMain, MessageToWorker};
 
     let res = crossbeam::scope(|scope| {
         let ActionRenderFuse {

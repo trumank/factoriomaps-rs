@@ -8,7 +8,7 @@ use fuser::{
     Request,
 };
 
-use crate::render::{MessageToMain, VirtualFile};
+use factoriomaps_lib::render::{MessageToMain, VirtualFile};
 
 const TTL: Duration = Duration::from_secs(1);
 const BLOCK_SIZE: u64 = 512;

@@ -284,9 +284,25 @@ dependencies = [
  "crossbeam",
  "crossbeam-channel",
  "ctrlc",
- "fast_image_resize",
+ "factoriomaps_lib",
  "fs2",
  "fuser",
+ "include_dir",
+ "indicatif",
+ "lazy_static",
+ "libc",
+ "serde",
+ "serde_json",
+ "webp",
+]
+
+[[package]]
+name = "factoriomaps_lib"
+version = "0.1.0"
+dependencies = [
+ "crossbeam",
+ "crossbeam-channel",
+ "fast_image_resize",
  "hooky",
  "image",
  "include_dir",
