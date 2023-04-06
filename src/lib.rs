@@ -68,7 +68,7 @@ hooky::define_hook! {
 }
 
 fn main() {
-    let output = std::env::var(render::FBRS_OUTPUT).unwrap();
+    let output = std::env::var("FBRS_OUTPUT").unwrap();
 
     let (result_rx, work_tx, result_tx) =
         (SR_RESULT.1.clone(), SR_WORK.0.clone(), SR_RESULT.0.clone());

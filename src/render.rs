@@ -22,8 +22,6 @@ const MAX_ZOOM: i32 = 20;
 const NUM_PARTS: u32 = 2;
 const PART_SIZE: u32 = TILE_SIZE / NUM_PARTS;
 
-pub const FBRS_OUTPUT: &str = "FBRS_OUTPUT";
-
 static WEB: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/web");
 
 pub struct VirtualFile {

@@ -1,73 +1,20 @@
 #![feature(int_roundings)]
 
+#[cfg(feature = "fuse")]
+mod fuse;
+#[cfg(feature = "fuse")]
 mod render;
 
-use std::collections::HashMap;
-use std::ffi::OsStr;
-use std::fs;
-use std::fs::File;
+use std::fs::{self, File};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, UNIX_EPOCH};
 
-use clap::Parser;
-
+use clap::{Parser, Subcommand};
 use crossbeam_channel::unbounded;
-
+use fs2::FileExt;
+use include_dir::{include_dir, Dir};
 use serde::{Deserialize, Serialize};
 
-use include_dir::{include_dir, Dir};
-
-use fuser::{
-    FileAttr, FileType, Filesystem, MountOption, ReplyAttr, ReplyCreate, ReplyEmpty, ReplyEntry,
-    ReplyWrite, Request,
-};
-use libc::ENOENT;
-
-use fs2::FileExt;
-
-use render::{MessageToMain, MessageToWorker, VirtualFile};
-
 static MOD: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/mod");
-
-const TTL: Duration = Duration::from_secs(1);
-const BLOCK_SIZE: u64 = 512;
-const STARTING_INODE: u64 = 2; // https://stackoverflow.com/questions/24613454/what-are-inode-numbers-1-and-2-used-for
-
-const HELLO_DIR_ATTR: FileAttr = FileAttr {
-    ino: 1,
-    size: 0,
-    blocks: 0,
-    atime: UNIX_EPOCH,
-    mtime: UNIX_EPOCH,
-    ctime: UNIX_EPOCH,
-    crtime: UNIX_EPOCH,
-    kind: FileType::Directory,
-    perm: 0o777,
-    nlink: 2,
-    uid: 1000,
-    gid: 100,
-    rdev: 0,
-    blksize: BLOCK_SIZE as u32,
-    flags: 0,
-};
-
-const HELLO_TXT_ATTR: FileAttr = FileAttr {
-    ino: 0,
-    size: 0,
-    blocks: 1,
-    atime: UNIX_EPOCH,
-    mtime: UNIX_EPOCH,
-    ctime: UNIX_EPOCH,
-    crtime: UNIX_EPOCH,
-    kind: FileType::RegularFile,
-    perm: 0o666,
-    nlink: 1,
-    uid: 1000,
-    gid: 100,
-    rdev: 0,
-    blksize: BLOCK_SIZE as u32,
-    flags: 0,
-};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct FactorioMods {
@@ -79,100 +26,57 @@ struct FactorioModEntry {
     enabled: bool,
 }
 
-struct HelloFS {
-    files: HashMap<u64, VirtualFile>,
-    next_inode: u64,
-    tx: crossbeam::channel::Sender<MessageToMain>,
+#[derive(Parser)]
+struct Args {
+    #[command(subcommand)]
+    action: Action,
 }
 
-impl HelloFS {
-    fn new(tx: crossbeam::channel::Sender<MessageToMain>) -> HelloFS {
-        HelloFS {
-            files: HashMap::new(),
-            next_inode: STARTING_INODE,
-            tx,
+#[derive(Subcommand)]
+enum Action {
+    #[cfg(feature = "fuse")]
+    RenderFuse(ActionRenderFuse),
+    RenderLdPreload(ActionRenderLdPreload),
+}
+
+#[cfg(feature = "fuse")]
+#[derive(Parser)]
+struct ActionRenderFuse {
+    /// Factorio directory root
+    factorio: PathBuf,
+    /// Render output path
+    output: PathBuf,
+    /// Path to map to render
+    map: String,
+    /// By default Xvfb will be used to run factorio in the background. Set this flag to make
+    /// the window visible
+    #[clap(long, short)]
+    debug: bool,
+}
+#[derive(Parser)]
+struct ActionRenderLdPreload {
+    /// Factorio directory root
+    factorio: PathBuf,
+    /// Render output path
+    output: PathBuf,
+    /// Path to map to render
+    map: String,
+    /// By default Xvfb will be used to run factorio in the background. Set this flag to make
+    /// the window visible
+    #[clap(long, short)]
+    debug: bool,
+}
+
+fn main() {
+    let args = Args::parse().action;
+    match args {
+        #[cfg(feature = "fuse")]
+        Action::RenderFuse(action) => {
+            render_fuse(action);
         }
-    }
-}
-
-impl HelloFS {
-    fn get_file(&mut self, inode: u64) -> Option<&mut VirtualFile> {
-        self.files.get_mut(&inode)
-    }
-    fn create_file(&mut self, path: String) -> u64 {
-        let inode = self.next_inode;
-        self.next_inode += 1;
-        self.files.insert(inode, VirtualFile::new(path));
-        inode
-    }
-}
-
-impl Filesystem for HelloFS {
-    fn lookup(&mut self, _req: &Request, _parent: u64, _name: &OsStr, reply: ReplyEntry) {
-        reply.error(ENOENT);
-    }
-
-    fn getattr(&mut self, _req: &Request, ino: u64, reply: ReplyAttr) {
-        match ino {
-            1 => reply.attr(&TTL, &HELLO_DIR_ATTR),
-            _ => reply.error(ENOENT),
+        Action::RenderLdPreload(action) => {
+            render_ldpreload(action);
         }
-    }
-
-    fn write(
-        &mut self,
-        _req: &Request,
-        inode: u64,
-        _fh: u64,
-        _offset: i64,
-        data: &[u8],
-        _write_flags: u32,
-        #[allow(unused_variables)] flags: i32,
-        _lock_owner: Option<u64>,
-        reply: ReplyWrite,
-    ) {
-        //println!("write() called with {:?} offset={:?} size={:?}", inode, offset, data.len());
-
-        use std::io::Write;
-        self.get_file(inode).unwrap().data.write_all(data).unwrap();
-
-        reply.written(data.len() as u32);
-        //reply.error(libc::EBADF);
-    }
-
-    fn create(
-        &mut self,
-        _req: &Request,
-        _parent: u64,
-        name: &OsStr,
-        _mode: u32,
-        _umask: u32,
-        _flags: i32,
-        reply: ReplyCreate,
-    ) {
-        //println!("create() called with {:?} {:?}", parent, name);
-        let mut attr = HELLO_TXT_ATTR;
-        attr.ino = self.create_file(name.to_str().unwrap().to_string());
-        attr.size = 0;
-        reply.created(&Duration::new(0, 0), &attr, 0, 10, 0);
-    }
-
-    fn release(
-        &mut self,
-        _req: &Request<'_>,
-        inode: u64,
-        _fh: u64,
-        _flags: i32,
-        _lock_owner: Option<u64>,
-        _flush: bool,
-        reply: ReplyEmpty,
-    ) {
-        //println!("release() called with {:?}", inode);
-        self.tx
-            .send(MessageToMain::File(self.files.remove(&inode).unwrap()))
-            .unwrap();
-        //println!("releasing {:?}", file.path);
-        reply.ok();
     }
 }
 
@@ -195,57 +99,6 @@ impl std::ops::Deref for ChildGuard {
 impl std::ops::DerefMut for ChildGuard {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
-    }
-}
-
-#[derive(clap::Parser)]
-struct Args {
-    #[command(subcommand)]
-    action: Action,
-}
-
-#[derive(clap::Subcommand)]
-enum Action {
-    RenderFuse(ActionRenderFuse),
-    RenderLdPreload(ActionRenderLdPreload),
-}
-
-#[derive(clap::Parser)]
-struct ActionRenderFuse {
-    /// Factorio directory root
-    factorio: PathBuf,
-    /// Render output path
-    output: PathBuf,
-    /// Path to map to render
-    map: String,
-    /// By default Xvfb will be used to run factorio in the background. Set this flag to make
-    /// the window visible
-    #[clap(long, short)]
-    debug: bool,
-}
-#[derive(clap::Parser)]
-struct ActionRenderLdPreload {
-    /// Factorio directory root
-    factorio: PathBuf,
-    /// Render output path
-    output: PathBuf,
-    /// Path to map to render
-    map: String,
-    /// By default Xvfb will be used to run factorio in the background. Set this flag to make
-    /// the window visible
-    #[clap(long, short)]
-    debug: bool,
-}
-
-fn main() {
-    let args = Args::parse().action;
-    match args {
-        Action::RenderFuse(action) => {
-            render_fuse(action);
-        }
-        Action::RenderLdPreload(action) => {
-            render_ldpreload(action);
-        }
     }
 }
 
@@ -345,7 +198,7 @@ fn render_ldpreload(action: ActionRenderLdPreload) {
         let mut factorio = ChildGuard(
             factorio_cmd
                 .env("LD_PRELOAD", "./target/release/libfactoriomaps_rs.so")
-                .env(render::FBRS_OUTPUT, output)
+                .env("FBRS_OUTPUT", output)
                 .arg("--disable-audio")
                 .arg("--disable-migration-window")
                 // --benchmark-graphics unpauses the game, but swollows errors
@@ -379,7 +232,10 @@ fn render_ldpreload(action: ActionRenderLdPreload) {
     .unwrap();
 }
 
+#[cfg(feature = "fuse")]
 fn render_fuse(action: ActionRenderFuse) {
+    use render::{MessageToMain, MessageToWorker};
+
     let res = crossbeam::scope(|scope| {
         let ActionRenderFuse {
             factorio,
@@ -429,12 +285,13 @@ fn render_fuse(action: ActionRenderFuse) {
 
         let mountpoint = factorio.join("script-output");
         let options = vec![
-            MountOption::FSName("fuser".to_string()),
+            fuser::MountOption::FSName("fuser".to_string()),
             //MountOption::AutoUnmount,
         ];
 
         let fuse_tx = send_result.clone();
-        let session = fuser::spawn_mount2(HelloFS::new(fuse_tx), mountpoint, &options).unwrap();
+        let session =
+            fuser::spawn_mount2(fuse::TilesFS::new(fuse_tx), mountpoint, &options).unwrap();
 
         let ctrlc_tx = send_result.clone();
         ctrlc::set_handler(move || {
