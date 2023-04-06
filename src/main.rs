@@ -1,7 +1,3 @@
-#![feature(int_roundings)]
-
-mod fuse;
-
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 
@@ -31,25 +27,11 @@ struct Args {
 
 #[derive(Subcommand)]
 enum Action {
-    RenderFuse(ActionRenderFuse),
-    RenderLdPreload(ActionRenderLdPreload),
+    Render(ActionRender),
 }
 
 #[derive(Parser)]
-struct ActionRenderFuse {
-    /// Factorio directory root
-    factorio: PathBuf,
-    /// Render output path
-    output: PathBuf,
-    /// Path to map to render
-    map: String,
-    /// By default Xvfb will be used to run factorio in the background. Set this flag to make
-    /// the window visible
-    #[clap(long, short)]
-    debug: bool,
-}
-#[derive(Parser)]
-struct ActionRenderLdPreload {
+struct ActionRender {
     /// Factorio directory root
     factorio: PathBuf,
     /// Render output path
@@ -65,11 +47,8 @@ struct ActionRenderLdPreload {
 fn main() {
     let args = Args::parse().action;
     match args {
-        Action::RenderFuse(action) => {
-            render_fuse(action);
-        }
-        Action::RenderLdPreload(action) => {
-            render_ldpreload(action);
+        Action::Render(action) => {
+            render(action);
         }
     }
 }
@@ -169,9 +148,9 @@ impl Drop for SetupGuard {
     }
 }
 
-fn render_ldpreload(action: ActionRenderLdPreload) {
+fn render(action: ActionRender) {
     crossbeam::scope(|_| {
-        let ActionRenderLdPreload {
+        let ActionRender {
             factorio,
             output,
             map,
@@ -232,81 +211,4 @@ fn render_ldpreload(action: ActionRenderLdPreload) {
         rx.recv().unwrap()
     })
     .unwrap();
-}
-
-fn render_fuse(action: ActionRenderFuse) {
-    use factoriomaps_lib::render::{self, MessageToMain, MessageToWorker};
-
-    let res = crossbeam::scope(|scope| {
-        let ActionRenderFuse {
-            factorio,
-            output,
-            map,
-            debug,
-        } = action;
-        let _setup_guard = SetupGuard::new(&factorio, &output, &map);
-
-        let mut factorio_cmd = std::process::Command::new(factorio.join("bin/x64/factorio"));
-
-        let _xvfb = if !debug {
-            factorio_cmd.env("DISPLAY", ":8");
-
-            Some(ChildGuard(
-                std::process::Command::new("Xvfb")
-                    .arg(":8") // TODO don't assume :8 isn't being used
-                    .arg("-screen")
-                    .arg(",0")
-                    .arg("1024x768x16")
-                    .spawn()
-                    .unwrap(),
-            ))
-        } else {
-            None
-        };
-
-        let _factorio = ChildGuard(
-            factorio_cmd
-                .arg("--disable-audio")
-                .arg("--disable-migration-window")
-                // --benchmark-graphics unpauses the game, but swollows errors
-                // --load-game is to figure out why something broke
-                .arg(if debug {
-                    "--load-game"
-                } else {
-                    "--benchmark-graphics"
-                })
-                .arg(map)
-                //.stdout(std::process::Stdio::null()) // TODO scan output for errors?
-                .spawn()
-                .unwrap(),
-        );
-
-        let (send_result, recv_result) = unbounded::<MessageToMain>();
-        let (send_work, recv_work) = unbounded::<MessageToWorker>();
-
-        let mountpoint = factorio.join("script-output");
-        let options = vec![
-            fuser::MountOption::FSName("fuser".to_string()),
-            //MountOption::AutoUnmount,
-        ];
-
-        let fuse_tx = send_result.clone();
-        let session =
-            fuser::spawn_mount2(fuse::TilesFS::new(fuse_tx), mountpoint, &options).unwrap();
-
-        let ctrlc_tx = send_result.clone();
-        ctrlc::set_handler(move || {
-            ctrlc_tx.send(MessageToMain::Killed).unwrap();
-        })
-        .unwrap();
-
-        render::spawn_threads(&output, scope, recv_work, send_result.clone());
-
-        render::main_loop(output, recv_result, send_work, send_result);
-
-        session.join();
-    });
-    if let Err(err) = res {
-        println!("{err:?}");
-    }
 }
