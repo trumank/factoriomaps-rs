@@ -4,8 +4,8 @@ use std::ffi::OsStr;
 use std::time::{Duration, UNIX_EPOCH};
 
 use fuser::{
-    FileAttr, FileType, Filesystem, ReplyAttr, ReplyCreate, ReplyEmpty, ReplyEntry,
-    ReplyWrite, Request,
+    FileAttr, FileType, Filesystem, ReplyAttr, ReplyCreate, ReplyEmpty, ReplyEntry, ReplyWrite,
+    Request,
 };
 
 use crate::render::{MessageToMain, VirtualFile};
