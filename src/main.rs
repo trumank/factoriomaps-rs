@@ -1,7 +1,6 @@
 #![feature(int_roundings)]
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::fs;
 use std::fs::File;
 use std::collections::HashMap;
@@ -191,7 +190,7 @@ impl ThreadContext {
         let mut min_zoom = HashMap::new();
 
         for surface in &info {
-            let Some(first) = surface.chunks.iter().next() else {
+            let Some(first) = surface.chunks.first() else {
                 continue;
             };
 
@@ -289,10 +288,10 @@ fn get_tile_parts() -> Vec<TilePart> {
     }
     parts
 }
-fn tile_write_parts(output_path: &Arc<PathBuf>, tile: &Tile, image: &DynamicImage) {
+fn tile_write_parts<P: AsRef<Path>>(output: P, tile: &Tile, image: &DynamicImage) {
     for part in get_tile_parts() {
         let sub_img = image.view(part.x * PART_SIZE, part.y * PART_SIZE, PART_SIZE, PART_SIZE).to_image();
-        let path = output_path.join("tiles").join(part.get_path(tile));
+        let path = output.as_ref().join("tiles").join(part.get_path(tile));
         fs::create_dir_all(path.parent().unwrap()).unwrap();
 
         let dyn_img = DynamicImage::from(sub_img);
@@ -497,7 +496,7 @@ impl std::ops::DerefMut for ChildGuard {
     }
 }
 
-fn extract_dir<S: AsRef<Path>>(dir: &Dir, base_path: S, find_replace: &HashMap<String, String>) -> std::io::Result<()> {
+fn extract_dir<P: AsRef<Path>>(dir: &Dir, base_path: P, find_replace: &HashMap<String, String>) -> std::io::Result<()> {
     let base_path = base_path.as_ref();
 
     for entry in dir.entries() {
@@ -551,29 +550,34 @@ fn main() {
     let args = Args::parse().action;
     match args {
         Action::Render { factorio, output, map, debug } => {
-            render(PathBuf::from(factorio), PathBuf::from(output), map, debug);
+            render(PathBuf::from(factorio), PathBuf::from(output), &map, debug);
         },
     }
 }
 
-fn render(factorio: PathBuf, output: PathBuf, map: String, debug: bool) {
-    let res = crossbeam::scope(|scope| {
+struct SetupGuard {
+    mod_path: PathBuf,
+    modlist_path: PathBuf,
+    modlist_str: String,
+}
+impl SetupGuard {
+    fn new<P: AsRef<Path>>(factorio: P, output: P, map: &str) -> Self {
         // check factorio lockfile
-        if let Ok(lockfile) = File::open(&factorio.join(".lock")) {
+        if let Ok(lockfile) = File::open(factorio.as_ref().join(".lock")) {
             lockfile.try_lock_exclusive().expect("Could not open lockfile, is factorio already running?");
             lockfile.unlock().unwrap();
         }
 
-        let mut sync_mods = ChildGuard(std::process::Command::new(factorio.join("bin/x64/factorio"))
+        let mut sync_mods = ChildGuard(std::process::Command::new(factorio.as_ref().join("bin/x64/factorio"))
             .arg("--sync-mods")
-            .arg(&map)
+            .arg(map)
             .spawn()
             .unwrap());
         sync_mods.wait().unwrap();
 
         // insert self into factorio mod list and save original to restore later
         let modname = "factoriomaps-rs";
-        let modlist_path = factorio.join("mods/mod-list.json");
+        let modlist_path = factorio.as_ref().join("mods/mod-list.json");
         let modlist_str = fs::read_to_string(&modlist_path).unwrap();
         let mut modlist: FactorioMods = serde_json::from_str(&modlist_str).unwrap();
         let mut found = false;
@@ -590,34 +594,33 @@ fn render(factorio: PathBuf, output: PathBuf, map: String, debug: bool) {
                 enabled: true,
             });
         }
-        fs::write(&modlist_path, &serde_json::to_vec_pretty(&modlist).unwrap()).unwrap();
-        let mod_path = factorio.join("mods").join(modname);
+        fs::write(&modlist_path, serde_json::to_vec_pretty(&modlist).unwrap()).unwrap();
+        let mod_path = factorio.as_ref().join("mods").join(modname);
         fs::remove_dir_all(&mod_path).ok();
         fs::create_dir(&mod_path).unwrap();
         MOD.extract(&mod_path).unwrap();
 
-        let mountpoint = factorio.join("script-output");
-        let options = vec![
-            MountOption::FSName("fuser".to_string()),
-            //MountOption::AutoUnmount,
-        ];
+        std::fs::create_dir_all(output).unwrap();
 
-        let (send_result, recv_result) = unbounded::<MessageToMain>();
-        let (send_work, recv_work) = unbounded::<MessageToWorker>();
+        Self {
+            modlist_path,
+            modlist_str,
+            mod_path,
+        }
+    }
+}
+impl Drop for SetupGuard {
+    fn drop(&mut self) {
+        fs::write(&self.modlist_path, self.modlist_str.as_bytes()).unwrap();
+        fs::remove_dir_all(&self.mod_path).unwrap();
+    }
+}
 
-        let fuse_tx = send_result.clone();
-        let session = fuser::spawn_mount2(
-            HelloFS::new(fuse_tx),
-            mountpoint,
-            &options,
-        ).unwrap();
+fn render<P: AsRef<Path>>(factorio: P, output: P, map: &str, debug: bool) {
+    let res = crossbeam::scope(|scope| {
+        let _setup_guard = SetupGuard::new(&factorio, &output, map);
 
-        let ctrlc_tx = send_result.clone();
-        ctrlc::set_handler(move || {
-            ctrlc_tx.send(MessageToMain::Killed).unwrap();
-        }).unwrap();
-
-        let mut factorio_cmd = std::process::Command::new(factorio.join("bin/x64/factorio"));
+        let mut factorio_cmd = std::process::Command::new(factorio.as_ref().join("bin/x64/factorio"));
 
         let _xvfb = if !debug {
             factorio_cmd.env("DISPLAY", ":8");
@@ -644,13 +647,32 @@ fn render(factorio: PathBuf, output: PathBuf, map: String, debug: bool) {
             .spawn()
             .unwrap());
 
-        let output_path = Arc::from(output);
-        std::fs::create_dir_all(&*output_path).unwrap();
+
+        let (send_result, recv_result) = unbounded::<MessageToMain>();
+        let (send_work, recv_work) = unbounded::<MessageToWorker>();
+
+        let mountpoint = factorio.as_ref().join("script-output");
+        let options = vec![
+            MountOption::FSName("fuser".to_string()),
+            //MountOption::AutoUnmount,
+        ];
+
+        let fuse_tx = send_result.clone();
+        let session = fuser::spawn_mount2(
+            HelloFS::new(fuse_tx),
+            mountpoint,
+            &options,
+        ).unwrap();
+
+        let ctrlc_tx = send_result.clone();
+        ctrlc::set_handler(move || {
+            ctrlc_tx.send(MessageToMain::Killed).unwrap();
+        }).unwrap();
 
         for _ in 0..std::thread::available_parallelism().unwrap().into() {
             let recv_work = recv_work.clone();
             let send_result = send_result.clone();
-            let arc = Arc::clone(&output_path);
+            let output = output.as_ref().to_owned();
             scope.spawn(move |_| {
                 while let Ok(work) = recv_work.recv() {
                     match work {
@@ -661,7 +683,7 @@ fn render(factorio: PathBuf, output: PathBuf, map: String, debug: bool) {
                             }).unwrap();
                         }
                         MessageToWorker::TileWriteParts { tile, image } => {
-                            tile_write_parts(&arc, &tile, &image);
+                            tile_write_parts(&output, &tile, &image);
                             send_result.send(MessageToMain::FinishWriteParts {
                                 tile,
                                 image,
@@ -682,7 +704,6 @@ fn render(factorio: PathBuf, output: PathBuf, map: String, debug: bool) {
                         }
                     }
                 }
-                //println!("exit thread #{i}");
             });
         }
 
@@ -771,7 +792,7 @@ fn render(factorio: PathBuf, output: PathBuf, map: String, debug: bool) {
 
                         let mut find_replace = HashMap::new();
                         find_replace.insert("$MAP_DATA$".to_owned(), serde_json::to_string(&info).unwrap());
-                        extract_dir(&WEB, &*output_path, &find_replace).unwrap();
+                        extract_dir(&WEB, &output, &find_replace).unwrap();
 
                         send_result.send(MessageToMain::Finished).unwrap();
                     }
@@ -786,10 +807,6 @@ fn render(factorio: PathBuf, output: PathBuf, map: String, debug: bool) {
         }
 
         session.join();
-
-        // TODO proper error handling and cleanup
-        fs::write(&modlist_path, modlist_str.as_bytes()).unwrap();
-        fs::remove_dir_all(&mod_path).unwrap();
     });
     if let Err(err) = res {
         println!("{err:?}");
