@@ -287,9 +287,11 @@ dependencies = [
  "fast_image_resize",
  "fs2",
  "fuser",
+ "hooky",
  "image",
  "include_dir",
  "indicatif",
+ "lazy_static",
  "libc",
  "serde",
  "serde_json",
@@ -353,6 +355,15 @@ name = "hermit-abi"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fed44880c466736ef9a5c5b5facefb5ed0785676d0c02d612db14e54f0d84286"
+
+[[package]]
+name = "hooky"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "95410c0ba59e36baa2142e9c3a612e55dc111c30be2a0882ef83b9f5017b6024"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "image"
