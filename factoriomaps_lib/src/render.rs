@@ -22,6 +22,8 @@ const MAX_ZOOM: i32 = 20;
 const NUM_PARTS: u32 = 2;
 const PART_SIZE: u32 = TILE_SIZE / NUM_PARTS;
 
+const TILE_EXTENSION: &str = "webp";
+
 static WEB: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/web");
 
 pub struct VirtualFile {
@@ -256,8 +258,8 @@ impl TilePart {
     fn get_path(&self, tile: &Tile) -> String {
         let components = self.get_path_components(tile);
         format!(
-            "{}/{}/{}/{}.webp",
-            tile.surface, components.0, components.1, components.2,
+            "{}/{}/{}/{}.{}",
+            tile.surface, components.0, components.1, components.2, TILE_EXTENSION
         )
     }
 }
@@ -474,12 +476,18 @@ pub fn main_loop<P: AsRef<Path>>(
 
                 if tc.loaded_tiles == tc.total_tiles {
                     #[derive(Serialize)]
+                    struct MapInfo {
+                        surfaces: HashMap<String, Surface>,
+                        extension: &'static str,
+                    }
+
+                    #[derive(Serialize)]
                     struct Surface {
                         tiles: Vec<(i32, i32, i32)>,
                         tags: HashMap<String, Vec<Tag>>,
                     }
 
-                    let mut info: HashMap<String, Surface> = std::mem::take(&mut tc.info)
+                    let mut surfaces: HashMap<String, Surface> = std::mem::take(&mut tc.info)
                         .into_iter()
                         .map(|s| {
                             (
@@ -492,11 +500,16 @@ pub fn main_loop<P: AsRef<Path>>(
                         })
                         .collect();
                     for tile in tc.tiles.keys() {
-                        info.get_mut(&tile.surface)
+                        surfaces.get_mut(&tile.surface)
                             .unwrap()
                             .tiles
                             .extend(get_tile_parts().iter().map(|p| p.get_path_components(tile)));
                     }
+
+                    let info = MapInfo {
+                        surfaces,
+                        extension: TILE_EXTENSION,
+                    };
 
                     let mut find_replace = HashMap::new();
                     find_replace.insert(

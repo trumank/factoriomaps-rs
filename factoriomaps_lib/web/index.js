@@ -4,7 +4,7 @@ const chunkSize = 1 / 1024;
 const tileSize = chunkSize / 32;
 
 function createLayer(name, surface) {
-  const mapInfoMap = new Map(surface.tiles.map(t => [`${t[0]},${t[1]},${t[2]}`, `tiles/${name}/${t[0]}/${t[1]}/${t[2]}.webp`]));
+  const mapInfoMap = new Map(surface.tiles.map(t => [`${t[0]},${t[1]},${t[2]}`, `tiles/${name}/${t[0]}/${t[1]}/${t[2]}.${mapInfo.extension}`]));
 
   const zooms = surface.tiles.map(t => t[0]);
   const minZoom = Math.min(...zooms);
@@ -49,7 +49,7 @@ function createLayer(name, surface) {
   };
 }
 
-const layers = Object.entries(mapInfo).map(
+const layers = Object.entries(mapInfo.surfaces).map(
   ([name, surface]) => [name, createLayer(name, surface)]
 );
 
