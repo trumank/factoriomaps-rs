@@ -10,7 +10,6 @@ use serde::{Deserialize, Serialize};
 
 use fast_image_resize as fr;
 use image::{DynamicImage, GenericImage, GenericImageView};
-use webp::*;
 
 use include_dir::{include_dir, Dir};
 
@@ -22,7 +21,7 @@ const MAX_ZOOM: i32 = 20;
 const NUM_PARTS: u32 = 2;
 const PART_SIZE: u32 = TILE_SIZE / NUM_PARTS;
 
-const TILE_EXTENSION: &str = "webp";
+const TILE_EXTENSION: &str = "jpg";
 
 static WEB: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/web");
 
@@ -281,9 +280,14 @@ fn tile_write_parts<P: AsRef<Path>>(output: P, tile: &Tile, image: &DynamicImage
         fs::create_dir_all(path.parent().unwrap()).unwrap();
 
         let dyn_img = DynamicImage::from(sub_img);
-        let encoder = Encoder::from_image(&dyn_img).unwrap();
-        let webp = encoder.encode(80.0);
-        std::fs::write(path, &*webp).unwrap();
+
+        let mut data = vec![];
+        let cur = std::io::Cursor::new(&mut data);
+        let encoder = jpeg_encoder::Encoder::new(cur, 80);
+        let (width, height) = dyn_img.dimensions();
+        encoder.encode(&dyn_img.into_bytes(), width as u16, height as u16, jpeg_encoder::ColorType::Rgba).unwrap();
+
+        std::fs::write(path, &*data).unwrap();
     }
 }
 

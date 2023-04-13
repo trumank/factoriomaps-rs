@@ -305,6 +305,7 @@ dependencies = [
  "image",
  "include_dir",
  "indicatif",
+ "jpeg-encoder",
  "lazy_static",
  "libc",
  "serde",
@@ -445,6 +446,12 @@ checksum = "936cfd212a0155903bcbc060e316fb6cc7cbf2e1907329391ebadc1fe0ce77c2"
 dependencies = [
  "libc",
 ]
+
+[[package]]
+name = "jpeg-encoder"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2cf3affe27ffd9f1992690ec7575568b222abe9cb39738f6531968aca8e64906"
 
 [[package]]
 name = "lazy_static"
