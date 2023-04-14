@@ -285,7 +285,16 @@ fn tile_write_parts<P: AsRef<Path>>(output: P, tile: &Tile, image: &DynamicImage
         let cur = std::io::Cursor::new(&mut data);
         let encoder = jpeg_encoder::Encoder::new(cur, 80);
         let (width, height) = dyn_img.dimensions();
-        encoder.encode(&dyn_img.into_bytes(), width as u16, height as u16, jpeg_encoder::ColorType::Rgba).unwrap();
+        let mut bytes = dyn_img.into_bytes();
+        for p in bytes.chunks_mut(4) {
+            if p[3] <= 0x7f {
+                p[0] = 27;
+                p[1] = 45;
+                p[2] = 51;
+                p[3] = 0xff;
+            }
+        }
+        encoder.encode(&bytes, width as u16, height as u16, jpeg_encoder::ColorType::Rgba).unwrap();
 
         std::fs::write(path, &*data).unwrap();
     }
