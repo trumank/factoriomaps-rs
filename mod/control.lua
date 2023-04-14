@@ -222,7 +222,7 @@ function take_screenshots(player)
             position = {chunk.x * 32 + 16, chunk.y * 32 + 16},
             resolution = {1024, 1024},
             zoom = 1,
-            path = surface.name .. ',' .. chunk.x .. ',' .. chunk.y .. '.png',
+            path = surface.name .. ',' .. chunk.x .. ',' .. chunk.y .. '.bmp',
             show_entity_info = true
           })
         end

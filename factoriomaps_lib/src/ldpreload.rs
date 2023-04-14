@@ -17,7 +17,7 @@ hooky::define_hook! {
         let filename = unsafe { CStr::from_ptr(c_filename) }.to_str().unwrap();
         let mode = unsafe { CStr::from_ptr(c_mode) }.to_str().unwrap();
         let path = std::path::Path::new(filename);
-        if  mode.contains('w') && (path.file_name() == Some(OsStr::new("info.json")) || path.extension() == Some(OsStr::new("png"))) {
+        if  mode.contains('w') && (path.file_name() == Some(OsStr::new("info.json")) || path.extension() == Some(OsStr::new("bmp"))) {
             let file = Box::new(VirtualFile::new(filename));
             let ptr = (&*file as *const VirtualFile) as *mut libc::FILE;
             OPEN_FILES.lock().unwrap().insert(ptr as usize, file);

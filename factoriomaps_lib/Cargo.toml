@@ -14,7 +14,7 @@ crossbeam = "0.8.2"
 crossbeam-channel = "0.5.7"
 fast_image_resize = "2.7.0"
 hooky = "0.2.0"
-image = { version = "0.24.6", default-features = false, features = ["png"] }
+image = { version = "0.24.6", default-features = false, features = ["bmp"] }
 include_dir = "0.7.3"
 indicatif = "0.17.3"
 jpeg-encoder = { version = "0.5.1", features = ["simd"] }

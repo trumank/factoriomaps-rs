@@ -429,7 +429,7 @@ pub fn main_loop<P: AsRef<Path>>(
                     assert!(info_exists, "SurfaceInfo already exists");
                     let info = serde_json::from_slice(&file.data).unwrap();
                     thread_context = Some(ThreadContext::new(info));
-                } else if file.path.extension() == Some(std::ffi::OsStr::new("png")) {
+                } else if file.path.extension() == Some(std::ffi::OsStr::new("bmp")) {
                     let mut split = file
                         .path
                         .file_stem()
