@@ -6,9 +6,13 @@ const tileSize = chunkSize / 32;
 function createLayer(name, surface) {
   const mapInfoMap = new Map(surface.tiles.map(t => [`${t[0]},${t[1]},${t[2]}`, `tiles/${name}/${t[0]}/${t[1]}/${t[2]}.${mapInfo.extension}`]));
 
-  const zooms = surface.tiles.map(t => t[0]);
-  const minZoom = Math.min(...zooms);
-  const maxZoom = Math.max(...zooms);
+  let minZoom = +Infinity;
+  let maxZoom = -Infinity;
+  for (const t of surface.tiles) {
+    minZoom = Math.min(minZoom, t[0]);
+    maxZoom = Math.max(maxZoom, t[0]);
+  }
+
   const bounds = L.latLngBounds(surface.tiles
     .filter(([z]) => z == maxZoom)
     .flatMap(([_, x, y]) => [[x, y], [x + 1, y + 1]])
