@@ -2,7 +2,6 @@ use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};
-use crossbeam_channel::unbounded;
 use fs2::FileExt;
 use include_dir::{include_dir, Dir};
 use serde::{Deserialize, Serialize};
@@ -195,7 +194,7 @@ fn render(action: ActionRender) {
                 .unwrap(),
         );
 
-        let (tx, rx) = unbounded::<()>();
+        let (tx, rx) = crossbeam::channel::unbounded::<()>();
 
         let ctrlc_tx = tx.clone();
         ctrlc::set_handler(move || {

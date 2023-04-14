@@ -71,9 +71,6 @@ name = "cc"
 version = "1.0.79"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "50d30906286121d95be3d479533b458f87493b30a4b5f79a607db8f5d11aa91f"
-dependencies = [
- "jobserver",
-]
 
 [[package]]
 name = "cfg-if"
@@ -267,7 +264,6 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "crossbeam",
- "crossbeam-channel",
  "ctrlc",
  "factoriomaps_lib",
  "fs2",
@@ -276,7 +272,6 @@ dependencies = [
  "libc",
  "serde",
  "serde_json",
- "webp",
 ]
 
 [[package]]
@@ -284,7 +279,6 @@ name = "factoriomaps_lib"
 version = "0.1.0"
 dependencies = [
  "crossbeam",
- "crossbeam-channel",
  "fast_image_resize",
  "hooky",
  "image",
@@ -295,7 +289,6 @@ dependencies = [
  "libc",
  "serde",
  "serde_json",
- "webp",
 ]
 
 [[package]]
@@ -413,15 +406,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "453ad9f582a441959e5f0d088b02ce04cfe8d51a8eaf077f12ac6d3e94164ca6"
 
 [[package]]
-name = "jobserver"
-version = "0.1.26"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "936cfd212a0155903bcbc060e316fb6cc7cbf2e1907329391ebadc1fe0ce77c2"
-dependencies = [
- "libc",
-]
-
-[[package]]
 name = "jpeg-encoder"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -438,15 +422,6 @@ name = "libc"
 version = "0.2.141"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3304a64d199bb964be99741b7a14d26972741915b3649639149b2479bb46f4b5"
-
-[[package]]
-name = "libwebp-sys"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "439fd1885aa28937e7edcd68d2e793cb4a22f8733460d2519fbafd2b215672bf"
-dependencies = [
- "cc",
-]
 
 [[package]]
 name = "linux-raw-sys"
@@ -658,16 +633,6 @@ name = "utf8parse"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "711b9620af191e0cdc7468a8d14e709c3dcdb115b36f838e601583af800a370a"
-
-[[package]]
-name = "webp"
-version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf022f821f166079a407d000ab57e84de020e66ffbbf4edde999bc7d6e371cae"
-dependencies = [
- "image",
- "libwebp-sys",
-]
 
 [[package]]
 name = "winapi"

@@ -1,5 +1,4 @@
-use crossbeam::channel::{Receiver, Sender};
-use crossbeam_channel::unbounded;
+use crossbeam::channel::{unbounded, Receiver, Sender};
 use std::ffi::{CStr, OsStr};
 use std::sync::{Arc, Mutex};
 
