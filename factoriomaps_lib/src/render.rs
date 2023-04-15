@@ -488,6 +488,7 @@ pub fn main_loop<P: AsRef<Path>>(
                 }
 
                 if tc.loaded_tiles == tc.total_tiles {
+                    tc.progress.finish();
                     #[derive(Serialize)]
                     struct MapInfo {
                         surfaces: HashMap<String, Surface>,
