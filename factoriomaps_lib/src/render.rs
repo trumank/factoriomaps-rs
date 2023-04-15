@@ -207,9 +207,18 @@ impl ThreadContext {
         let progress = ProgressBar::new(tiles.len() as u64);
         progress.set_style(
             ProgressStyle::with_template(
-                "{wide_bar} Elapsed: {elapsed_precise}, ETA: {eta_precise}",
+                "{wide_bar} Elapsed: {elapsed}, ETA: {smoothed_eta}",
+            ).unwrap().with_key(
+                "smoothed_eta",
+                |s: &indicatif::ProgressState, w: &mut dyn std::fmt::Write| match (s.pos(), s.len()) {
+                    (pos, Some(len)) => write!(
+                        w,
+                        "{:#}",
+                        indicatif::HumanDuration(std::time::Duration::from_millis((s.elapsed().as_millis() * (len as u128 - pos as u128) / (pos as u128)) as u64))
+                    ).unwrap(),
+                    _ => write!(w, "-").unwrap(),
+                },
             )
-            .unwrap(),
         );
 
         ThreadContext {
