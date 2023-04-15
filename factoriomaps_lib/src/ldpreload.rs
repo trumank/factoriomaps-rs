@@ -63,18 +63,24 @@ impl CxxString {
         std::str::from_utf8(unsafe { std::slice::from_raw_parts(self.data, self.length) }).unwrap()
     }
 }
+#[repr(C)]
+struct MemoryBitmap {
+    width: u32,
+    height: u32,
+    data: *const u8,
+    data_capacity: usize,
+    data_size: usize,
+    flipped: bool,
+}
 
 #[no_mangle]
-extern "C" fn save_image(path: *const CxxString,
-                             width: u32,
-                             height: u32,
-                             bytes_per_pixel: u32,
-                             data: *const u8,
-                             _pitch: i32,
-                             _quality: u8) {
+extern "C" fn save_image(bitmap: *const MemoryBitmap, path: *const CxxString, _quality: u8) {
     let path = std::path::Path::new(unsafe { (*path).to_str() });
 
-    let data = unsafe { std::slice::from_raw_parts(data, (width * height * bytes_per_pixel) as usize) }.to_vec();
+    // makes several assumptions about the layout of the bitmap
+    let MemoryBitmap { width, height, data, data_size, .. } = unsafe { &*bitmap };
+
+    let data = unsafe { std::slice::from_raw_parts(*data, *data_size) }.to_vec();
 
     let mut split = path
         .file_stem()
@@ -87,7 +93,7 @@ extern "C" fn save_image(path: *const CxxString,
 
     let tile = crate::render::Tile::new_max_zoom(surface, x, y);
     let image = image::DynamicImage::ImageRgba8(
-        image::RgbaImage::from_raw(width, height, data).unwrap(),
+        image::RgbaImage::from_raw(*width, *height, data).unwrap(),
     );
     SR_WORK.0
         .send(MessageToWorker::TileWriteParts { tile, image })
@@ -101,7 +107,7 @@ fn main() {
         let target = engine.open_self().unwrap();
         let factorio = target.enum_module().unwrap().find(|m| m.data().name.starts_with("factorio")).unwrap();
 
-        let sym = factorio.get_symbol("_ZN12MemoryBitmap9saveImageERKN10Filesystem4PathEjjjPKhih").unwrap();
+        let sym = factorio.get_symbol("_ZNK12MemoryBitmap10saveToFileERKN10Filesystem4PathEh").unwrap();
         let mut address = sym.offset as usize;
         if &*factorio.data().name != "factorio" {
             address += factorio.data().base; // in package build symbol is relative to the module
