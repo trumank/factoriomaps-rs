@@ -53,7 +53,62 @@ hooky::define_hook! {
     }
 }
 
+#[repr(C)]
+struct CxxString {
+    data: *const u8,
+    length: usize,
+}
+impl CxxString {
+    fn to_str(&self) -> &str {
+        std::str::from_utf8(unsafe { std::slice::from_raw_parts(self.data, self.length) }).unwrap()
+    }
+}
+
+#[no_mangle]
+extern "C" fn save_image(path: *const CxxString,
+                             width: u32,
+                             height: u32,
+                             bytes_per_pixel: u32,
+                             data: *const u8,
+                             _pitch: i32,
+                             _quality: u8) {
+    let path = std::path::Path::new(unsafe { (*path).to_str() });
+
+    let data = unsafe { std::slice::from_raw_parts(data, (width * height * bytes_per_pixel) as usize) }.to_vec();
+
+    let mut split = path
+        .file_stem()
+        .and_then(std::ffi::OsStr::to_str)
+        .unwrap()
+        .split(',');
+    let surface = split.next().unwrap().to_owned();
+    let x = split.next().unwrap().parse::<i32>().unwrap();
+    let y = split.next().unwrap().parse::<i32>().unwrap();
+
+    let tile = crate::render::Tile::new_max_zoom(surface, x, y);
+    let image = image::DynamicImage::ImageRgba8(
+        image::RgbaImage::from_raw(width, height, data).unwrap(),
+    );
+    SR_WORK.0
+        .send(MessageToWorker::TileWriteParts { tile, image })
+        .unwrap();
+}
+
 fn main() {
+    unsafe {
+        use udbg::prelude::UDbgEngine;
+        let mut engine = udbg::os::DefaultEngine::default();
+        let target = engine.open_self().unwrap();
+        let factorio = target.enum_module().unwrap().find(|m| m.data().name.starts_with("factorio")).unwrap();
+
+        let sym = factorio.get_symbol("_ZN12MemoryBitmap9saveImageERKN10Filesystem4PathEjjjPKhih").unwrap();
+        let mut address = sym.offset as usize;
+        if &*factorio.data().name != "factorio" {
+            address += factorio.data().base; // in package build symbol is relative to the module
+        }
+        retour::RawDetour::new(address as *const (), save_image as *const ()).unwrap().enable().unwrap();
+    }
+
     let output = std::env::var("FBRS_OUTPUT").unwrap();
 
     let (result_rx, work_tx, result_tx) =

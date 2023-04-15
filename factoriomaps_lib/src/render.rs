@@ -41,16 +41,11 @@ pub enum MessageToMain {
     Finished,
     Killed,
     File(VirtualFile),
-    FinishReadImage { tile: Tile, image: DynamicImage },
     FinishWriteParts { tile: Tile, image: DynamicImage },
     FinishBuildParent { parent: Tile, image: DynamicImage },
 }
 
 pub enum MessageToWorker {
-    ReadImage {
-        tile: Tile,
-        data: Vec<u8>,
-    },
     TileWriteParts {
         tile: Tile,
         image: DynamicImage,
@@ -70,6 +65,14 @@ pub struct Tile {
 }
 
 impl Tile {
+    pub fn new_max_zoom(surface: String, x: i32, y: i32) -> Self {
+        Tile {
+            surface,
+            zoom: MAX_ZOOM,
+            x,
+            y
+        }
+    }
     /// Returns tile containing this tile
     fn zoom_out(&self) -> Tile {
         Tile {
@@ -189,12 +192,7 @@ impl ThreadContext {
             min_zoom.insert(surface.name.to_owned(), mz);
 
             for chunk in &surface.chunks {
-                let mut tile = Tile {
-                    surface: surface.name.to_owned(),
-                    x: chunk.x,
-                    y: chunk.y,
-                    zoom: MAX_ZOOM,
-                };
+                let mut tile = Tile::new_max_zoom(surface.name.to_owned(), chunk.x, chunk.y);
 
                 loop {
                     if tile.zoom <= mz || tiles.contains_key(&tile) {
@@ -376,14 +374,6 @@ pub fn spawn_threads<P: AsRef<Path>>(
         scope.spawn(move |_| {
             while let Ok(work) = recv_work.recv() {
                 match work {
-                    MessageToWorker::ReadImage { tile, data } => {
-                        send_result
-                            .send(MessageToMain::FinishReadImage {
-                                tile,
-                                image: image::load_from_memory(&data).unwrap(),
-                            })
-                            .unwrap();
-                    }
                     MessageToWorker::TileWriteParts { tile, image } => {
                         tile_write_parts(&output, &tile, &image);
                         send_result
@@ -438,34 +428,7 @@ pub fn main_loop<P: AsRef<Path>>(
                     assert!(info_exists, "SurfaceInfo already exists");
                     let info = serde_json::from_slice(&file.data).unwrap();
                     thread_context = Some(ThreadContext::new(info));
-                } else if file.path.extension() == Some(std::ffi::OsStr::new("bmp")) {
-                    let mut split = file
-                        .path
-                        .file_stem()
-                        .and_then(std::ffi::OsStr::to_str)
-                        .unwrap()
-                        .split(',');
-                    let surface = split.next().unwrap().to_owned();
-                    let x = split.next().unwrap().parse::<i32>().unwrap();
-                    let y = split.next().unwrap().parse::<i32>().unwrap();
-
-                    send_work
-                        .send(MessageToWorker::ReadImage {
-                            tile: Tile {
-                                surface,
-                                x,
-                                y,
-                                zoom: MAX_ZOOM,
-                            },
-                            data: file.data,
-                        })
-                        .unwrap();
                 }
-            }
-            MessageToMain::FinishReadImage { tile, image } => {
-                send_work
-                    .send(MessageToWorker::TileWriteParts { tile, image })
-                    .unwrap();
             }
             MessageToMain::FinishWriteParts { tile, image } => {
                 let tc = thread_context.as_mut().unwrap();
