@@ -17,12 +17,7 @@ likely ends up being how fast Factorio can render and serialize PNGs.
 
 ## Usage
 
-Requires the unstable [artifact-dependencies][1] feature to be enabled with
-`-Zbindeps` or similar:
-
-    cargo run --release -Zbindeps render path/to/factorio/directory/ output/directory/ path/or/map/name
-
-[1]: https://doc.rust-lang.org/cargo/reference/unstable.html#artifact-dependencies
+    cargo run --release render path/to/factorio/directory/ output/directory/ path/or/map/name
 
 ## TODOs
  - [ ] actual error handling
